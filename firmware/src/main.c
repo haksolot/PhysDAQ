@@ -19,7 +19,7 @@ int main(void)
 
     printk("\n=== Xiao Sense IMU ===\n");
     printk("Colors: r=red  g=green  b=blue  w=white  0=off\n");
-    printk("Streaming accel + gyro every 500ms...\n\n");
+    printk("Streaming accel + gyro @ 20 Hz...\n\n");
 
     while (1) {
         imu_print_sample();
@@ -35,7 +35,7 @@ int main(void)
             }
         }
 
-        k_sleep(K_MSEC(500));
+        k_sleep(K_MSEC(50));
     }
 
     return 0;

@@ -6,6 +6,10 @@ APP   := firmware
 BUILD := build
 UF2   := $(BUILD)/zephyr/zephyr.uf2
 
+# Auto-detect virtualenv using Make's wildcard (no shell — works on Windows/Linux/macOS).
+# Checks .venv/Scripts/python.exe (Windows), then .venv/bin/python (Unix), then system python.
+PYTHON := $(or $(wildcard .venv/Scripts/python.exe),$(wildcard .venv/bin/python),python)
+
 .PHONY: all help setup build flash term plot clean env
 
 all: build
@@ -17,7 +21,7 @@ help:
 	@echo "  make build   Compile firmware"
 	@echo "  make flash   Copy UF2 to XIAO-SENSE bootloader drive"
 	@echo "  make term    Open serial terminal (115200, auto-detect port)"
-	@echo "  make plot    Live gyroscope plot (requires: pip install pyqtgraph PyQt6)"
+	@echo "  make plot    Live gyro plot + 3D orientation (requires: pip install pyqtgraph PyQt6 PyOpenGL imufusion pyserial)"
 	@echo "  make clean   Remove build directory"
 	@echo "  make env     Show environment setup hints"
 	@echo ""
@@ -32,19 +36,19 @@ setup:
 	fi
 
 build:
-	@python scripts/build-wrapper.py $(BOARD) $(APP)
+	@$(PYTHON) scripts/build-wrapper.py $(BOARD) $(APP)
 
 flash: build
-	@python scripts/uf2-flash.py $(UF2)
+	@$(PYTHON) scripts/uf2-flash.py $(UF2)
 
 term:
-	@python scripts/term.py
+	@$(PYTHON) scripts/term.py
 
 plot:
-	@python scripts/plotter.py
+	@$(PYTHON) scripts/plotter.py
 
 clean:
-	@python -c "import shutil, os; shutil.rmtree('$(BUILD)') if os.path.isdir('$(BUILD)') else print('Nothing to clean.')"
+	@$(PYTHON) -c "import shutil, os; shutil.rmtree('$(BUILD)') if os.path.isdir('$(BUILD)') else print('Nothing to clean.')"
 
 env:
 	@echo "--- Windows ---"
