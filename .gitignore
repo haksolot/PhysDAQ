@@ -13,3 +13,4 @@ tools/
 # Python
 *.pyc
 __pycache__/
+.venv/
