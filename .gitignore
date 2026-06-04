@@ -1,0 +1,15 @@
+# Build artifacts
+build/
+*.uf2
+
+# Zephyr workspace (auto-populated by west)
+.west/
+.cache/
+zephyr/
+modules/
+bootloader/
+tools/
+
+# Python
+*.pyc
+__pycache__/
