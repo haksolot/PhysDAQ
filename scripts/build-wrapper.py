@@ -44,6 +44,13 @@ def main():
         print("[build-wrapper] Stale build detected (references external workspace). Cleaning...")
         shutil.rmtree(BUILD)
 
+    if not shutil.which("west"):
+        print("ERROR: 'west' not found in PATH.")
+        print("  → Launch the Zephyr toolchain shell first:")
+        print("    nrfutil toolchain-manager launch --terminal --ncs-version v3.3.0")
+        print("    . .\\scripts\\setup-env.ps1   (inside that shell)")
+        sys.exit(1)
+
     cmd = ["west", "build", "-p", "-b", BOARD, APP]
     print(f"[build-wrapper] Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)

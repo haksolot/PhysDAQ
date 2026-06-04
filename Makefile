@@ -42,10 +42,10 @@ flash: build
 	@$(PYTHON) scripts/uf2-flash.py $(UF2)
 
 term:
-	@$(PYTHON) scripts/term.py
+	@PYTHONPATH= $(PYTHON) scripts/term.py
 
 plot:
-	@$(PYTHON) scripts/plotter.py
+	@PYTHONPATH= $(PYTHON) scripts/plotter.py
 
 clean:
 	@$(PYTHON) -c "import shutil, os; shutil.rmtree('$(BUILD)') if os.path.isdir('$(BUILD)') else print('Nothing to clean.')"

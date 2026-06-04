@@ -51,6 +51,9 @@ WINDOW = 200       # samples shown in the gyro plot
 BAUD   = 115200
 SAMPLE_RATE = 20   # Hz — matches firmware k_sleep(50ms)
 
+GYRO_STILL_THRESHOLD  = 0.05  # rad/s — below this = board considered stationary
+ZUPT_MIN_STILL_SAMPLES = 10   # consecutive still samples before ZUPT kicks in
+
 PATTERN = re.compile(
     r'AX:(-?[\d.]+)\s+AY:(-?[\d.]+)\s+AZ:(-?[\d.]+)\s+\|\s+'
     r'GX:(-?[\d.]+)\s+GY:(-?[\d.]+)\s+GZ:(-?[\d.]+)'
@@ -129,13 +132,32 @@ def serial_reader(port):
         sys.exit(1)
 
     print(f"Reading from {port} @ {BAUD} baud...")
-    last_t = time.monotonic()
+    last_t      = time.monotonic()
+    still_count = 0
+    was_still   = False
+    error_count = 0
 
     while True:
         try:
             line = ser.readline().decode("utf-8", errors="replace").strip()
+            error_count = 0
         except Exception as e:
-            print(f"Serial read error: {e}")
+            error_count += 1
+            if error_count == 1:
+                print(f"Serial error: {e}")
+            if error_count >= 5:
+                print("Too many serial errors — reconnecting...")
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+                time.sleep(1.0)
+                try:
+                    ser = serial.Serial(port, BAUD, timeout=1)
+                    error_count = 0
+                    print(f"Reconnected to {port}")
+                except serial.SerialException as re:
+                    print(f"Reconnect failed: {re}")
             continue
 
         m = PATTERN.search(line)
@@ -160,9 +182,23 @@ def serial_reader(port):
         accel    = np.array([ax, ay, az]) / 9.81
         gyro_deg = np.array([gx, gy, gz]) * (180.0 / np.pi)
 
+        # ZUPT: pass zero gyro to Madgwick when stationary → stops drift integration
+        gyro_norm = float(np.linalg.norm(np.array([gx, gy, gz])))
+        if gyro_norm < GYRO_STILL_THRESHOLD:
+            still_count += 1
+        else:
+            still_count = 0
+
+        zupt_active = still_count >= ZUPT_MIN_STILL_SAMPLES
+        if zupt_active != was_still:
+            print("ZUPT: ON — drift frozen" if zupt_active else "ZUPT: OFF — tracking")
+            was_still = zupt_active
+
+        gyro_input = np.zeros(3) if zupt_active else gyro_deg
+
         try:
             with ahrs_lock:
-                getattr(ahrs, _UPDATE_METHOD)(gyro_deg, accel, dt)
+                getattr(ahrs, _UPDATE_METHOD)(gyro_input, accel, dt)
                 q = ahrs.quaternion
                 current_quat[0] = float(q.w)
                 current_quat[1] = float(q.x)
