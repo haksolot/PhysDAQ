@@ -1,6 +1,7 @@
 /*
  * XIAO BLE Sense board overlay
  * Defines the onboard red LED on P0.26
+ * Note: LSM6DS3TR-C IMU is already defined in xiao_ble_sense.dts (i2c0 @ 0x6A)
  */
 
 / {

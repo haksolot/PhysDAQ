@@ -6,7 +6,7 @@ APP   := firmware
 BUILD := build
 UF2   := $(BUILD)/zephyr/zephyr.uf2
 
-.PHONY: all help setup build flash term clean env
+.PHONY: all help setup build flash term plot clean env
 
 all: build
 
@@ -17,6 +17,7 @@ help:
 	@echo "  make build   Compile firmware"
 	@echo "  make flash   Copy UF2 to XIAO-SENSE bootloader drive"
 	@echo "  make term    Open serial terminal (115200, auto-detect port)"
+	@echo "  make plot    Live gyroscope plot (requires: pip install pyqtgraph PyQt6)"
 	@echo "  make clean   Remove build directory"
 	@echo "  make env     Show environment setup hints"
 	@echo ""
@@ -38,6 +39,9 @@ flash: build
 
 term:
 	@python scripts/term.py
+
+plot:
+	@python scripts/plotter.py
 
 clean:
 	@python -c "import shutil, os; shutil.rmtree('$(BUILD)') if os.path.isdir('$(BUILD)') else print('Nothing to clean.')"
