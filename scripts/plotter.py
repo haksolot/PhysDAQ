@@ -54,9 +54,15 @@ SAMPLE_RATE = 20   # Hz — matches firmware k_sleep(50ms)
 GYRO_STILL_THRESHOLD  = 0.05  # rad/s — below this = board considered stationary
 ZUPT_MIN_STILL_SAMPLES = 10   # consecutive still samples before ZUPT kicks in
 
+# Temperature compensation: die temp = ambient + self-heating offset.
+# Calibrate: place board next to a thermometer, wait 5 min at rest,
+# then adjust until estimated ambient matches the thermometer reading.
+TEMP_SELF_HEATING = 12.0  # °C — typical for LSM6DS3TR-C on Xiao BLE Sense
+
 PATTERN = re.compile(
     r'AX:(-?[\d.]+)\s+AY:(-?[\d.]+)\s+AZ:(-?[\d.]+)\s+\|\s+'
     r'GX:(-?[\d.]+)\s+GY:(-?[\d.]+)\s+GZ:(-?[\d.]+)'
+    r'(?:\s+\|\s+T:(-?[\d.]+))?'  # optional — absent on older firmware
 )
 
 # ---------------------------------------------------------------------------
@@ -93,6 +99,7 @@ print(f"imufusion AHRS method: {_UPDATE_METHOD}")
 
 ahrs_lock = threading.Lock()
 current_quat = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z] — identity
+current_temp = [None]  # die temperature in °C (None until first reading)
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +174,8 @@ def serial_reader(port):
         try:
             ax, ay, az = float(m.group(1)), float(m.group(2)), float(m.group(3))
             gx, gy, gz = float(m.group(4)), float(m.group(5)), float(m.group(6))
+            if m.group(7) is not None:
+                current_temp[0] = float(m.group(7))
         except ValueError:
             continue
 
@@ -280,7 +289,19 @@ def main():
     c_gz = plot.plot(xs, list(gz_buf), pen=pg.mkPen("#89b4fa", width=2), name="GZ")
     layout.addWidget(plot, stretch=1)
 
-    # ---- right: 3D view ----
+    # ---- right: 3D view + temperature label ----
+    right_widget = QtWidgets.QWidget()
+    right_layout = QtWidgets.QVBoxLayout(right_widget)
+    right_layout.setContentsMargins(0, 0, 0, 0)
+    right_layout.setSpacing(4)
+
+    temp_label = QtWidgets.QLabel("Température — en attente...")
+    temp_label.setStyleSheet(
+        "color: #cdd6f4; background: #313244; border-radius: 6px;"
+        "padding: 6px 12px; font-size: 14px; font-family: monospace;"
+    )
+    temp_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+
     view = gl.GLViewWidget()
     view.setMinimumWidth(480)
     view.setCameraPosition(distance=6, elevation=25, azimuth=45)
@@ -305,7 +326,9 @@ def main():
     body_axes.setSize(2.5, 2.5, 2.5)
     view.addItem(body_axes)
 
-    layout.addWidget(view, stretch=1)
+    right_layout.addWidget(view, stretch=1)
+    right_layout.addWidget(temp_label)
+    layout.addWidget(right_widget, stretch=1)
     win.show()
 
     # ---- timer: update both panels ----
@@ -319,6 +342,15 @@ def main():
 
         apply_quat(board,      q)
         apply_quat(body_axes,  q)
+
+        t = current_temp[0]
+        if t is not None:
+            ambient = t - TEMP_SELF_HEATING
+            temp_label.setText(
+                f"Die: {t:.1f} °C   |   "
+                f"Ambiant estimé: {ambient:.1f} °C  "
+                f"(offset: -{TEMP_SELF_HEATING:.1f} °C)"
+            )
 
     timer = QtCore.QTimer()
     timer.timeout.connect(update)

@@ -31,7 +31,7 @@ int imu_init(void)
 
 void imu_print_sample(void)
 {
-    struct sensor_value accel[3], gyro[3];
+    struct sensor_value accel[3], gyro[3], temp;
 
     if (sensor_sample_fetch(imu) < 0) {
         printk("IMU fetch error\n");
@@ -40,9 +40,12 @@ void imu_print_sample(void)
 
     sensor_channel_get(imu, SENSOR_CHAN_ACCEL_XYZ, accel);
     sensor_channel_get(imu, SENSOR_CHAN_GYRO_XYZ, gyro);
+    sensor_channel_get(imu, SENSOR_CHAN_DIE_TEMP, &temp);
 
     print_val("AX", &accel[0]); print_val("AY", &accel[1]); print_val("AZ", &accel[2]);
     printk(" | ");
     print_val("GX", &gyro[0]);  print_val("GY", &gyro[1]);  print_val("GZ", &gyro[2]);
+    printk(" | ");
+    print_val("T", &temp);
     printk("\n");
 }
