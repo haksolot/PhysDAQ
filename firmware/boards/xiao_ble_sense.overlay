@@ -1,0 +1,18 @@
+/*
+ * XIAO BLE Sense board overlay
+ * Defines the onboard red LED on P0.26
+ */
+
+/ {
+    aliases {
+        led0 = &led0;
+    };
+
+    leds {
+        compatible = "gpio-leds";
+        led0: led_0 {
+            gpios = <&gpio0 26 GPIO_ACTIVE_LOW>;
+            label = "Red LED";
+        };
+    };
+};
