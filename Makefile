@@ -10,18 +10,21 @@ UF2   := $(BUILD)/zephyr/zephyr.uf2
 # Checks .venv/Scripts/python.exe (Windows), then .venv/bin/python (Unix), then system python.
 PYTHON := $(or $(wildcard .venv/Scripts/python.exe),$(wildcard .venv/bin/python),python)
 
-.PHONY: all help setup build flash term plot clean env
+.PHONY: all help setup build rebuild flash term plot log process clean env
 
 all: build
 
 help:
 	@echo "Xiao Sense Firmware — Available targets"
 	@echo ""
-	@echo "  make setup   Initialize west workspace (run once after clone)"
-	@echo "  make build   Compile firmware"
-	@echo "  make flash   Copy UF2 to XIAO-SENSE bootloader drive"
+	@echo "  make setup    Initialize west workspace (run once after clone)"
+	@echo "  make build    Compile firmware (incremental)"
+	@echo "  make rebuild  Pristine build — forces CMake reconfiguration (use after overlay/DTS changes)"
+	@echo "  make flash    Copy UF2 to XIAO-SENSE bootloader drive"
 	@echo "  make term    Open serial terminal (115200, auto-detect port)"
 	@echo "  make plot    Live gyro plot + 3D orientation (requires: pip install pyqtgraph PyQt6 PyOpenGL imufusion pyserial)"
+	@echo "  make log     Record PPG+IMU to logs/YYYY-MM-DD_HH-MM-SS.csv"
+	@echo "  make process FILE=logs/....csv   Filter + compute BPM/SpO2/HRV/orientation"
 	@echo "  make clean   Remove build directory"
 	@echo "  make env     Show environment setup hints"
 	@echo ""
@@ -38,7 +41,10 @@ setup:
 build:
 	@$(PYTHON) scripts/build-wrapper.py $(BOARD) $(APP)
 
-flash: build
+rebuild:
+	@$(PYTHON) scripts/build-wrapper.py $(BOARD) $(APP) --pristine
+
+flash:
 	@$(PYTHON) scripts/uf2-flash.py $(UF2)
 
 term:
@@ -46,6 +52,16 @@ term:
 
 plot:
 	@PYTHONPATH= $(PYTHON) scripts/plotter.py
+
+log:
+	@PYTHONPATH= $(PYTHON) analysis/logger.py
+
+process:
+ifndef FILE
+	@echo "Usage: make process FILE=logs/<filename>.csv"
+else
+	@PYTHONPATH= $(PYTHON) analysis/pipeline.py $(FILE)
+endif
 
 clean:
 	@$(PYTHON) -c "import shutil, os; shutil.rmtree('$(BUILD)') if os.path.isdir('$(BUILD)') else print('Nothing to clean.')"

@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Real-time IMU plotter + 3D orientation visualizer for Xiao BLE Sense.
+"""Real-time IMU + PPG plotter for MAID wearable (Xiao BLE Sense + MAX30102).
 
-Left panel : gyroscope time series (GX/GY/GZ)
-Right panel: 3D board rotating in real time via Madgwick filter (imufusion)
+Layout:
+  Left top  : Gyroscope time series (GX/GY/GZ in rad/s)
+  Left bot  : PPG waveform (Red and IR, raw 18-bit ADC counts)
+  Right     : 3D board orientation via Madgwick filter (imufusion)
 
-Dependencies: pip install pyqtgraph PyQt6 pyserial imufusion
+Dependencies: pip install pyqtgraph PyQt6 pyserial imufusion PyOpenGL
 NOTE: yaw drifts over time without a magnetometer — pitch/roll are stable.
-
-Future: migrate filter to firmware (option 3) for lower latency + stable yaw
-        with an external magnetometer.
 """
 
 import sys
@@ -28,7 +27,7 @@ except ImportError:
 try:
     import pyqtgraph.opengl as gl
 except ImportError:
-    print("ERROR: PyOpenGL not installed (required for 3D view).\nInstall: pip install PyOpenGL")
+    print("ERROR: PyOpenGL not installed.\nInstall: pip install PyOpenGL")
     sys.exit(1)
 
 try:
@@ -47,45 +46,43 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-WINDOW = 200       # samples shown in the gyro plot
-BAUD   = 115200
-SAMPLE_RATE = 20   # Hz — matches firmware k_sleep(50ms)
+WINDOW      = 300       # samples shown in plots (3 s at 100 Hz)
+BAUD        = 115200
+SAMPLE_RATE = 100       # Hz — driven by MAX30102 PPG_RDY interrupt
 
-GYRO_STILL_THRESHOLD  = 0.05  # rad/s — below this = board considered stationary
-ZUPT_MIN_STILL_SAMPLES = 10   # consecutive still samples before ZUPT kicks in
+GYRO_STILL_THRESHOLD   = 0.05  # rad/s — below this = stationary
+ZUPT_MIN_STILL_SAMPLES = 20    # consecutive still samples before ZUPT
 
-# Temperature compensation: die temp = ambient + self-heating offset.
-# Calibrate: place board next to a thermometer, wait 5 min at rest,
-# then adjust until estimated ambient matches the thermometer reading.
-TEMP_SELF_HEATING = 12.0  # °C — typical for LSM6DS3TR-C on Xiao BLE Sense
-
+# Matches: "PPG red=NNN ir=NNN | IMU ax=... ay=... az=... gx=... gy=... gz=..."
+# Gyro is in rad/s (Zephyr sensor API), accel in m/s².
 PATTERN = re.compile(
-    r'AX:(-?[\d.]+)\s+AY:(-?[\d.]+)\s+AZ:(-?[\d.]+)\s+\|\s+'
-    r'GX:(-?[\d.]+)\s+GY:(-?[\d.]+)\s+GZ:(-?[\d.]+)'
-    r'(?:\s+\|\s+T:(-?[\d.]+))?'  # optional — absent on older firmware
+    r'PPG\s+red=(\d+)\s+ir=(\d+)\s+\|\s+IMU\s+'
+    r'ax=(-?[\d.]+)\s+ay=(-?[\d.]+)\s+az=(-?[\d.]+)\s+'
+    r'gx=(-?[\d.]+)\s+gy=(-?[\d.]+)\s+gz=(-?[\d.]+)'
 )
 
 # ---------------------------------------------------------------------------
 # Shared state (serial thread → UI thread)
 # ---------------------------------------------------------------------------
-gx_buf = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
-gy_buf = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
-gz_buf = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
+gx_buf  = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
+gy_buf  = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
+gz_buf  = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
+red_buf = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
+ir_buf  = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
 
 ahrs = imufusion.Ahrs()
 try:
     ahrs.settings = imufusion.Settings(
         imufusion.Convention.NWU,
-        0.5,              # gain
-        2000,             # gyroscope range deg/s
-        10,               # acceleration rejection (g)
-        10,               # magnetic rejection (unused)
-        5 * SAMPLE_RATE,  # recovery trigger period (samples)
+        0.5,
+        2000,
+        10,
+        10,
+        5 * SAMPLE_RATE,
     )
 except Exception:
-    pass  # settings API varies between versions
+    pass
 
-# Detect the correct update method name (changed between imufusion releases)
 _UPDATE_METHOD = next(
     (m for m in ("update_no_magnet", "update_no_magnetometer", "update_imu")
      if hasattr(ahrs, m)),
@@ -97,13 +94,12 @@ if _UPDATE_METHOD is None:
     sys.exit(1)
 print(f"imufusion AHRS method: {_UPDATE_METHOD}")
 
-ahrs_lock = threading.Lock()
+ahrs_lock    = threading.Lock()
 current_quat = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z] — identity
-current_temp = [None]  # die temperature in °C (None until first reading)
 
 
 # ---------------------------------------------------------------------------
-# Serial port detection (same logic as term.py)
+# Serial port detection
 # ---------------------------------------------------------------------------
 def find_xiao_port():
     ports = list(serial.tools.list_ports.comports())
@@ -163,8 +159,8 @@ def serial_reader(port):
                     ser = serial.Serial(port, BAUD, timeout=1)
                     error_count = 0
                     print(f"Reconnected to {port}")
-                except serial.SerialException as re:
-                    print(f"Reconnect failed: {re}")
+                except serial.SerialException as exc:
+                    print(f"Reconnect failed: {exc}")
             continue
 
         m = PATTERN.search(line)
@@ -172,26 +168,27 @@ def serial_reader(port):
             continue
 
         try:
-            ax, ay, az = float(m.group(1)), float(m.group(2)), float(m.group(3))
-            gx, gy, gz = float(m.group(4)), float(m.group(5)), float(m.group(6))
-            if m.group(7) is not None:
-                current_temp[0] = float(m.group(7))
+            red = float(m.group(1))
+            ir  = float(m.group(2))
+            ax, ay, az = float(m.group(3)), float(m.group(4)), float(m.group(5))
+            gx, gy, gz = float(m.group(6)), float(m.group(7)), float(m.group(8))
         except ValueError:
             continue
 
-        now = time.monotonic()
-        dt  = max(now - last_t, 1e-4)
+        now    = time.monotonic()
+        dt     = max(now - last_t, 1e-4)
         last_t = now
 
+        red_buf.append(red)
+        ir_buf.append(ir)
         gx_buf.append(gx)
         gy_buf.append(gy)
         gz_buf.append(gz)
 
-        # imufusion expects accel in g, gyro in deg/s
+        # imufusion: accel in g, gyro in °/s — gyro from firmware is rad/s
         accel    = np.array([ax, ay, az]) / 9.81
         gyro_deg = np.array([gx, gy, gz]) * (180.0 / np.pi)
 
-        # ZUPT: pass zero gyro to Madgwick when stationary → stops drift integration
         gyro_norm = float(np.linalg.norm(np.array([gx, gy, gz])))
         if gyro_norm < GYRO_STILL_THRESHOLD:
             still_count += 1
@@ -218,10 +215,10 @@ def serial_reader(port):
 
 
 # ---------------------------------------------------------------------------
-# 3D board mesh  (roughly XIAO BLE Sense proportions)
+# 3D board mesh
 # ---------------------------------------------------------------------------
 def make_board_mesh():
-    w, h, t = 2.1, 1.75, 0.12   # width, height, thickness (normalised)
+    w, h, t = 2.1, 1.75, 0.12
     v = np.array([
         [-w/2, -h/2, -t/2], [ w/2, -h/2, -t/2],
         [ w/2,  h/2, -t/2], [-w/2,  h/2, -t/2],
@@ -229,23 +226,20 @@ def make_board_mesh():
         [ w/2,  h/2,  t/2], [-w/2,  h/2,  t/2],
     ], dtype=np.float32)
     f = np.array([
-        [0,1,2],[0,2,3],  # bottom
-        [4,5,6],[4,6,7],  # top
-        [0,1,5],[0,5,4],  # front
-        [2,3,7],[2,7,6],  # back
-        [0,3,7],[0,7,4],  # left
-        [1,2,6],[1,6,5],  # right
+        [0,1,2],[0,2,3],
+        [4,5,6],[4,6,7],
+        [0,1,5],[0,5,4],
+        [2,3,7],[2,7,6],
+        [0,3,7],[0,7,4],
+        [1,2,6],[1,6,5],
     ])
     colors = np.tile([0.12, 0.38, 0.12, 1.0], (len(f), 1)).astype(np.float32)
-    colors[2:4] = [0.20, 0.62, 0.20, 1.0]  # top face slightly brighter
+    colors[2:4] = [0.20, 0.62, 0.20, 1.0]
     md = gl.MeshData(vertexes=v, faces=f, faceColors=colors)
     return gl.GLMeshItem(meshdata=md, smooth=False,
                          drawEdges=True, edgeColor=(0.45, 0.9, 0.45, 0.9))
 
 
-# ---------------------------------------------------------------------------
-# Apply orientation from quaternion [w, x, y, z] to a GL item
-# ---------------------------------------------------------------------------
 def apply_quat(item, wxyz):
     w, x, y, z = float(wxyz[0]), float(wxyz[1]), float(wxyz[2]), float(wxyz[3])
     mat = QtGui.QMatrix4x4(
@@ -271,43 +265,48 @@ def main():
     pg.setConfigOptions(antialias=True, background="#1e1e2e", foreground="#cdd6f4")
 
     win = QtWidgets.QWidget()
-    win.setWindowTitle("Xiao Sense — IMU Live")
-    win.resize(1200, 560)
+    win.setWindowTitle("MAID — IMU + PPG Live")
+    win.resize(1400, 700)
+
     layout = QtWidgets.QHBoxLayout(win)
     layout.setContentsMargins(6, 6, 6, 6)
     layout.setSpacing(6)
 
-    # ---- left: gyro plot ----
-    plot = pg.PlotWidget(title="Gyroscope (rad/s)")
-    plot.showGrid(x=True, y=True, alpha=0.2)
-    plot.setLabel("left", "rad/s")
-    plot.setLabel("bottom", f"derniers {WINDOW} échantillons  (@20 Hz = {WINDOW//20}s)")
-    plot.addLegend(offset=(10, 10))
     xs = list(range(WINDOW))
-    c_gx = plot.plot(xs, list(gx_buf), pen=pg.mkPen("#f38ba8", width=2), name="GX")
-    c_gy = plot.plot(xs, list(gy_buf), pen=pg.mkPen("#a6e3a1", width=2), name="GY")
-    c_gz = plot.plot(xs, list(gz_buf), pen=pg.mkPen("#89b4fa", width=2), name="GZ")
-    layout.addWidget(plot, stretch=1)
 
-    # ---- right: 3D view + temperature label ----
-    right_widget = QtWidgets.QWidget()
-    right_layout = QtWidgets.QVBoxLayout(right_widget)
-    right_layout.setContentsMargins(0, 0, 0, 0)
-    right_layout.setSpacing(4)
+    # ── left column: gyro (top) + PPG (bottom) ──────────────────────────
+    left_widget = QtWidgets.QWidget()
+    left_layout = QtWidgets.QVBoxLayout(left_widget)
+    left_layout.setContentsMargins(0, 0, 0, 0)
+    left_layout.setSpacing(4)
 
-    temp_label = QtWidgets.QLabel("Température — en attente...")
-    temp_label.setStyleSheet(
-        "color: #cdd6f4; background: #313244; border-radius: 6px;"
-        "padding: 6px 12px; font-size: 14px; font-family: monospace;"
-    )
-    temp_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    gyro_plot = pg.PlotWidget(title="Gyroscope (rad/s)")
+    gyro_plot.showGrid(x=True, y=True, alpha=0.2)
+    gyro_plot.setLabel("left", "rad/s")
+    gyro_plot.setLabel("bottom", f"derniers {WINDOW} échantillons  (@{SAMPLE_RATE} Hz = {WINDOW//SAMPLE_RATE}s)")
+    gyro_plot.addLegend(offset=(10, 10))
+    c_gx = gyro_plot.plot(xs, list(gx_buf), pen=pg.mkPen("#f38ba8", width=2), name="GX")
+    c_gy = gyro_plot.plot(xs, list(gy_buf), pen=pg.mkPen("#a6e3a1", width=2), name="GY")
+    c_gz = gyro_plot.plot(xs, list(gz_buf), pen=pg.mkPen("#89b4fa", width=2), name="GZ")
+    left_layout.addWidget(gyro_plot, stretch=1)
 
+    ppg_plot = pg.PlotWidget(title="PPG — brut 18-bit (pose le doigt sur le capteur)")
+    ppg_plot.showGrid(x=True, y=True, alpha=0.2)
+    ppg_plot.setLabel("left", "ADC counts")
+    ppg_plot.setLabel("bottom", f"derniers {WINDOW} échantillons  (@{SAMPLE_RATE} Hz = {WINDOW//SAMPLE_RATE}s)")
+    ppg_plot.addLegend(offset=(10, 10))
+    c_red = ppg_plot.plot(xs, list(red_buf), pen=pg.mkPen("#f38ba8", width=2), name="Red")
+    c_ir  = ppg_plot.plot(xs, list(ir_buf),  pen=pg.mkPen("#cba6f7", width=2), name="IR")
+    left_layout.addWidget(ppg_plot, stretch=1)
+
+    layout.addWidget(left_widget, stretch=2)
+
+    # ── right column: 3D orientation ────────────────────────────────────
     view = gl.GLViewWidget()
-    view.setMinimumWidth(480)
+    view.setMinimumWidth(420)
     view.setCameraPosition(distance=6, elevation=25, azimuth=45)
     view.setBackgroundColor("#1e1e2e")
 
-    # World-frame reference grid + axes
     grid = gl.GLGridItem()
     grid.setSize(8, 8)
     grid.setSpacing(1, 1)
@@ -318,7 +317,6 @@ def main():
     world_axes.setSize(1.5, 1.5, 1.5)
     view.addItem(world_axes)
 
-    # Board mesh + body-frame axes (rotate together)
     board = make_board_mesh()
     view.addItem(board)
 
@@ -326,31 +324,21 @@ def main():
     body_axes.setSize(2.5, 2.5, 2.5)
     view.addItem(body_axes)
 
-    right_layout.addWidget(view, stretch=1)
-    right_layout.addWidget(temp_label)
-    layout.addWidget(right_widget, stretch=1)
+    layout.addWidget(view, stretch=1)
     win.show()
 
-    # ---- timer: update both panels ----
+    # ── timer: refresh all panels at 20 FPS ─────────────────────────────
     def update():
         c_gx.setData(xs, list(gx_buf))
         c_gy.setData(xs, list(gy_buf))
         c_gz.setData(xs, list(gz_buf))
+        c_red.setData(xs, list(red_buf))
+        c_ir.setData(xs, list(ir_buf))
 
         with ahrs_lock:
             q = current_quat.copy()
-
-        apply_quat(board,      q)
-        apply_quat(body_axes,  q)
-
-        t = current_temp[0]
-        if t is not None:
-            ambient = t - TEMP_SELF_HEATING
-            temp_label.setText(
-                f"Die: {t:.1f} °C   |   "
-                f"Ambiant estimé: {ambient:.1f} °C  "
-                f"(offset: -{TEMP_SELF_HEATING:.1f} °C)"
-            )
+        apply_quat(board,     q)
+        apply_quat(body_axes, q)
 
     timer = QtCore.QTimer()
     timer.timeout.connect(update)
