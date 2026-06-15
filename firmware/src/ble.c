@@ -142,16 +142,31 @@ void ble_send(const uint8_t *data, size_t len)
 		return;
 	}
 
-	/* Fragment into ATT-MTU-sized chunks.
-	 * A GATT notification must fit within one ATT PDU (MTU - 3 bytes overhead).
-	 * The Python side buffers until '\n', so fragmentation is transparent. */
 	uint16_t payload = bt_gatt_get_mtu(current_conn) - 3;
-	size_t   offset  = 0;
+	/* Safety: clamp in case MTU not yet negotiated or returns unexpected value */
+	if (payload < 20 || payload > 244) {
+		payload = 20;
+	}
 
+	size_t offset = 0;
 	while (offset < len) {
 		size_t chunk = MIN(payload, len - offset);
-		bt_gatt_notify(current_conn, &nus_svc.attrs[2],
-			       data + offset, chunk);
+		int err = bt_gatt_notify(current_conn, &nus_svc.attrs[2],
+					 data + offset, chunk);
+		if (err) {
+			/* TX queue full (-ENOMEM) or disconnected — drop rest of sample */
+			return;
+		}
 		offset += chunk;
+	}
+}
+
+void ble_stop(void)
+{
+	bt_le_adv_stop();
+	if (current_conn) {
+		bt_conn_disconnect(current_conn,
+				   BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+		k_sleep(K_MSEC(150));
 	}
 }
