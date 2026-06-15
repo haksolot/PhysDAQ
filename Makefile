@@ -10,7 +10,7 @@ UF2   := $(BUILD)/zephyr/zephyr.uf2
 # Checks .venv/Scripts/python.exe (Windows), then .venv/bin/python (Unix), then system python.
 PYTHON := $(or $(wildcard .venv/Scripts/python.exe),$(wildcard .venv/bin/python),python)
 
-.PHONY: all help setup build rebuild flash term plot log process explore clean env
+.PHONY: all help setup build rebuild flash term plot log process explore ble-log ble-plot clean env
 
 all: build
 
@@ -26,6 +26,8 @@ help:
 	@echo "  make log     Record PPG+IMU to logs/YYYY-MM-DD_HH-MM-SS.csv"
 	@echo "  make process FILE=logs/....csv   Filter + compute BPM/SpO2/HRV/orientation"
 	@echo "  make explore FILE=logs/....csv   Interactive viewer (zoom/pan, all signals)"
+	@echo "  make ble-log   Record PPG+IMU via BLE (wireless)"
+	@echo "  make ble-plot  Live plot via BLE (wireless)"
 	@echo "  make clean   Remove build directory"
 	@echo "  make env     Show environment setup hints"
 	@echo ""
@@ -56,6 +58,12 @@ plot:
 
 log:
 	@PYTHONPATH= $(PYTHON) analysis/logger.py
+
+ble-log:
+	@PYTHONPATH= $(PYTHON) analysis/logger.py --ble
+
+ble-plot:
+	@PYTHONPATH= $(PYTHON) scripts/plotter.py --ble
 
 process:
 ifndef FILE
