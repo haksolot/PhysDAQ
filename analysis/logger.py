@@ -89,7 +89,7 @@ NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
 
 async def _ble_find_device(addr_hint, timeout=8.0):
-    """Discover by NUS UUID (not by name). Interactive pick when multiple found."""
+    """Discover by NUS UUID. Retries forever if not found (board may be sleeping)."""
     try:
         from bleak import BleakScanner
     except ImportError:
@@ -99,23 +99,35 @@ async def _ble_find_device(addr_hint, timeout=8.0):
     if addr_hint:
         return addr_hint
 
-    print("BLE: scanning for sensors (NUS UUID)...")
-    found = await BleakScanner.discover(timeout=timeout,
-                                        service_uuids=[NUS_SERVICE_UUID])
-    if not found:
-        print("ERROR: no sensor found. Is the board on and not sleeping?")
-        sys.exit(1)
-    if len(found) == 1:
-        print(f"BLE: found {found[0].name}  {found[0].address}")
-        return found[0].address
+    import asyncio
+    attempt = 0
+    while True:
+        attempt += 1
+        print(f"BLE: scanning (attempt {attempt})...")
+        found = await BleakScanner.discover(timeout=timeout,
+                                            service_uuids=[NUS_SERVICE_UUID])
+        if not found:
+            all_devs = await BleakScanner.discover(timeout=4.0)
+            found = [d for d in all_devs
+                     if NUS_SERVICE_UUID in
+                     [u.lower() for u in (d.metadata.get("uuids") or [])]]
 
-    print(f"\n{len(found)} sensors found:")
-    for i, d in enumerate(found):
-        print(f"  [{i}] {d.address}  {d.name}")
-    print("Tip: use --ble-addr=<address> to skip this prompt.")
-    choice = input("Select sensor [0]: ").strip()
-    idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
-    return found[idx].address
+        if not found:
+            print("BLE: no sensor found — board may be sleeping, move it to wake. Retrying in 5 s...")
+            await asyncio.sleep(5.0)
+            continue
+
+        if len(found) == 1:
+            print(f"BLE: found {found[0].name}  {found[0].address}")
+            return found[0].address
+
+        print(f"\n{len(found)} sensors found:")
+        for i, d in enumerate(found):
+            print(f"  [{i}] {d.address}  {d.name}")
+        print("Tip: use --ble-addr=<address> to skip this prompt.")
+        choice = input("Select sensor [0]: ").strip()
+        idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
+        return found[idx].address
 
 
 def _ble_lines(addr_hint):

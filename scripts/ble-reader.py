@@ -30,36 +30,41 @@ NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # PC → device (writ
 
 
 async def find_device(addr_hint: str | None = None, timeout: float = 8.0) -> str:
-    """Return the BLE address to connect to.
-
-    If addr_hint is given, use it directly.
-    If one device is found, use it automatically.
-    If several are found, show a numbered list and ask the user to pick.
-    """
+    """Discover by NUS UUID. Retries forever if not found (board may be sleeping)."""
     if addr_hint:
         return addr_hint
 
-    print("Scanning for MAID sensors (NUS UUID)...", file=sys.stderr)
-    found = await BleakScanner.discover(timeout=timeout,
-                                        service_uuids=[NUS_SERVICE_UUID])
-    if not found:
-        print("ERROR: no sensor found. Is the board on and not sleeping?",
-              file=sys.stderr)
-        sys.exit(1)
+    attempt = 0
+    while True:
+        attempt += 1
+        print(f"Scanning for sensors (NUS UUID, attempt {attempt})...", file=sys.stderr)
+        found = await BleakScanner.discover(timeout=timeout,
+                                            service_uuids=[NUS_SERVICE_UUID])
+        if not found:
+            # Fallback: unfiltered scan + manual UUID match (more reliable on Windows)
+            all_devs = await BleakScanner.discover(timeout=4.0)
+            found = [d for d in all_devs
+                     if NUS_SERVICE_UUID in
+                     [u.lower() for u in (d.metadata.get("uuids") or [])]]
 
-    if len(found) == 1:
-        d = found[0]
-        print(f"Found: {d.name}  {d.address}", file=sys.stderr)
-        return d.address
+        if not found:
+            print("No sensor found — board may be sleeping, move it to wake. Retrying in 5 s...",
+                  file=sys.stderr)
+            await asyncio.sleep(5.0)
+            continue
 
-    # Multiple sensors — let the user choose which patient's data to stream
-    print(f"\n{len(found)} sensors found:", file=sys.stderr)
-    for i, d in enumerate(found):
-        print(f"  [{i}] {d.address}  {d.name}", file=sys.stderr)
-    print("Tip: use --ble-addr=<address> to skip this prompt.", file=sys.stderr)
-    choice = input("Select sensor [0]: ").strip()
-    idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
-    return found[idx].address
+        if len(found) == 1:
+            d = found[0]
+            print(f"Found: {d.name}  {d.address}", file=sys.stderr)
+            return d.address
+
+        print(f"\n{len(found)} sensors found:", file=sys.stderr)
+        for i, d in enumerate(found):
+            print(f"  [{i}] {d.address}  {d.name}", file=sys.stderr)
+        print("Tip: use --ble-addr=<address> to skip this prompt.", file=sys.stderr)
+        choice = input("Select sensor [0]: ").strip()
+        idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
+        return found[idx].address
 
 
 async def run(addr_hint: str | None) -> None:
