@@ -3,6 +3,7 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
+#include <zephyr/sys/util.h>
 #include <zephyr/sys/printk.h>
 #include "ble.h"
 
@@ -19,8 +20,9 @@
 #define BT_UUID_NUS_TX      BT_UUID_DECLARE_128(BT_UUID_NUS_TX_VAL)
 #define BT_UUID_NUS_RX      BT_UUID_DECLARE_128(BT_UUID_NUS_RX_VAL)
 
-static struct bt_conn *current_conn;
-static bool            notify_enabled;
+static struct bt_conn              *current_conn;
+static bool                         notify_enabled;
+static struct bt_gatt_exchange_params mtu_params;
 
 static void tx_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
@@ -74,12 +76,28 @@ static const struct bt_data sd[] = {
 		sizeof(CONFIG_BT_DEVICE_NAME) - 1),
 };
 
+static void mtu_exchanged(struct bt_conn *conn, uint8_t err,
+			  struct bt_gatt_exchange_params *params)
+{
+	/* Log negotiated MTU so we can confirm payload capacity in make term */
+	printk("BLE: MTU %u bytes (%u payload)\n",
+	       bt_gatt_get_mtu(conn), bt_gatt_get_mtu(conn) - 3);
+}
+
 static void on_connected(struct bt_conn *conn, uint8_t err)
 {
 	if (err) {
 		return;
 	}
 	current_conn = bt_conn_ref(conn);
+
+	/* Request larger ATT MTU so a full data line (~120 B) fits in one notify.
+	 * Default ATT MTU = 23 B → 20 B payload, which is far too small.
+	 * Requesting from both sides ensures negotiation even if the central
+	 * (bleak) doesn't initiate it first. */
+	mtu_params.func = mtu_exchanged;
+	bt_gatt_exchange_mtu(conn, &mtu_params);
+
 	printk("BLE: connected\n");
 }
 
@@ -123,6 +141,17 @@ void ble_send(const uint8_t *data, size_t len)
 	if (!current_conn || !notify_enabled) {
 		return;
 	}
-	/* attrs[2] = TX characteristic value — see service layout above */
-	bt_gatt_notify(current_conn, &nus_svc.attrs[2], data, len);
+
+	/* Fragment into ATT-MTU-sized chunks.
+	 * A GATT notification must fit within one ATT PDU (MTU - 3 bytes overhead).
+	 * The Python side buffers until '\n', so fragmentation is transparent. */
+	uint16_t payload = bt_gatt_get_mtu(current_conn) - 3;
+	size_t   offset  = 0;
+
+	while (offset < len) {
+		size_t chunk = MIN(payload, len - offset);
+		bt_gatt_notify(current_conn, &nus_svc.attrs[2],
+			       data + offset, chunk);
+		offset += chunk;
+	}
 }

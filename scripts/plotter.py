@@ -22,7 +22,10 @@ import threading
 import queue
 import numpy as np
 
-USE_BLE = "--ble" in sys.argv
+USE_BLE  = "--ble" in sys.argv
+BLE_ADDR = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--ble-addr=")), None)
+if BLE_ADDR:
+    USE_BLE = True
 
 try:
     import pyqtgraph as pg
@@ -232,16 +235,38 @@ NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
 
+async def _ble_find_device(addr_hint, timeout=8.0):
+    """Discover by NUS UUID (not by name). Interactive pick when multiple found."""
+    from bleak import BleakScanner
+    if addr_hint:
+        return addr_hint
+    print("BLE: scanning for sensors (NUS UUID)...")
+    found = await BleakScanner.discover(timeout=timeout,
+                                        service_uuids=[NUS_SERVICE_UUID])
+    if not found:
+        print("ERROR: no sensor found. Is the board on and not sleeping?")
+        sys.exit(1)
+    if len(found) == 1:
+        print(f"BLE: found {found[0].name}  {found[0].address}")
+        return found[0].address
+    print(f"\n{len(found)} sensors found:")
+    for i, d in enumerate(found):
+        print(f"  [{i}] {d.address}  {d.name}")
+    print("Tip: use --ble-addr=<address> to skip this prompt.")
+    choice = input("Select sensor [0]: ").strip()
+    idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
+    return found[idx].address
+
+
 def ble_reader():
     try:
         import asyncio
-        from bleak import BleakScanner, BleakClient
+        from bleak import BleakClient
     except ImportError:
         print("ERROR: bleak not installed.  pip install bleak")
         sys.exit(1)
 
-    ready = threading.Event()
-    buf   = [""]
+    buf = [""]
 
     def on_notify(_, data):
         buf[0] += data.decode("utf-8", errors="replace")
@@ -250,18 +275,11 @@ def ble_reader():
             process_line(line)
 
     async def _run():
-        print("BLE: scanning for MAID...")
-        found = await BleakScanner.discover(timeout=8.0,
-                                            service_uuids=[NUS_SERVICE_UUID])
-        if not found:
-            print("ERROR: MAID not found. Is the board on and not sleeping?")
-            sys.exit(1)
-        addr = found[0].address
-        print(f"BLE: found {found[0].name} ({addr})")
+        addr = await _ble_find_device(BLE_ADDR)
+        from bleak import BleakClient
         async with BleakClient(addr, timeout=10.0) as client:
             print(f"Transport: BLE NUS ({addr})")
             await client.start_notify(NUS_TX_UUID, on_notify)
-            ready.set()
             try:
                 while True:
                     await asyncio.sleep(0.2)

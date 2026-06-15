@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Low-level BLE NUS receiver for MAID.
+"""BLE NUS receiver for MAID.
 
-Discovers the MAID device by NUS service UUID, connects, and streams
-received lines to stdout — same format as the USB serial output.
+Discovers devices by NUS service UUID (not by name — name is project-specific
+and will change).  When multiple sensors are in range, shows a list and lets
+you pick, or use --ble-addr to target a specific device directly.
 
-Used directly by make ble-log and make ble-plot, or standalone:
-    python scripts/ble-reader.py
-    python scripts/ble-reader.py | python analysis/logger.py --stdin
+Usage:
+    python scripts/ble-reader.py                        # auto / interactive
+    python scripts/ble-reader.py --ble-addr=DA:10:C0:EF:FD:F9
+
+Output: raw data lines on stdout (same format as USB serial).
 
 Dependencies: pip install bleak
 """
@@ -26,27 +29,41 @@ NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # device → PC (noti
 NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # PC → device (write)
 
 
-async def find_maid(timeout: float = 8.0) -> str:
-    print("Scanning for MAID (NUS UUID)...", file=sys.stderr)
+async def find_device(addr_hint: str | None = None, timeout: float = 8.0) -> str:
+    """Return the BLE address to connect to.
+
+    If addr_hint is given, use it directly.
+    If one device is found, use it automatically.
+    If several are found, show a numbered list and ask the user to pick.
+    """
+    if addr_hint:
+        return addr_hint
+
+    print("Scanning for MAID sensors (NUS UUID)...", file=sys.stderr)
     found = await BleakScanner.discover(timeout=timeout,
                                         service_uuids=[NUS_SERVICE_UUID])
     if not found:
-        print("ERROR: no MAID device found. "
-              "Is the board powered on and not sleeping?", file=sys.stderr)
+        print("ERROR: no sensor found. Is the board on and not sleeping?",
+              file=sys.stderr)
         sys.exit(1)
 
-    device = found[0]
-    if len(found) > 1:
-        print(f"Warning: {len(found)} MAID devices found — using first",
-              file=sys.stderr)
-    print(f"Found: {device.name}  ({device.address})", file=sys.stderr)
-    return device.address
+    if len(found) == 1:
+        d = found[0]
+        print(f"Found: {d.name}  {d.address}", file=sys.stderr)
+        return d.address
+
+    # Multiple sensors — let the user choose which patient's data to stream
+    print(f"\n{len(found)} sensors found:", file=sys.stderr)
+    for i, d in enumerate(found):
+        print(f"  [{i}] {d.address}  {d.name}", file=sys.stderr)
+    print("Tip: use --ble-addr=<address> to skip this prompt.", file=sys.stderr)
+    choice = input("Select sensor [0]: ").strip()
+    idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
+    return found[idx].address
 
 
-async def run() -> None:
-    address = await find_maid()
-
-    # Buffer for incomplete lines split across BLE packets
+async def run(addr_hint: str | None) -> None:
+    address = await find_device(addr_hint)
     buf = ""
 
     def on_notify(char: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -58,8 +75,7 @@ async def run() -> None:
 
     print(f"Connecting to {address}...", file=sys.stderr)
     async with BleakClient(address, timeout=10.0) as client:
-        print("Connected. Streaming data (Ctrl+C to stop)...\n",
-              file=sys.stderr)
+        print("Connected. Streaming (Ctrl+C to stop)...\n", file=sys.stderr)
         await client.start_notify(NUS_TX_UUID, on_notify)
         try:
             while True:
@@ -71,4 +87,6 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    addr = next((a.split("=", 1)[1] for a in sys.argv[1:]
+                 if a.startswith("--ble-addr=")), None)
+    asyncio.run(run(addr))

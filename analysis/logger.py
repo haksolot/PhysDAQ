@@ -32,7 +32,10 @@ PATTERN = re.compile(
 )
 HEADER = ["timestamp", "red", "ir", "ax", "ay", "az", "gx", "gy", "gz"]
 
-USE_BLE = "--ble" in sys.argv
+USE_BLE   = "--ble" in sys.argv
+BLE_ADDR  = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--ble-addr=")), None)
+if BLE_ADDR:
+    USE_BLE = True
 
 
 # ── Serial transport ──────────────────────────────────────────────────────────
@@ -85,10 +88,40 @@ NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
 
-def _ble_lines():
+async def _ble_find_device(addr_hint, timeout=8.0):
+    """Discover by NUS UUID (not by name). Interactive pick when multiple found."""
+    try:
+        from bleak import BleakScanner
+    except ImportError:
+        print("ERROR: bleak not installed.  pip install bleak")
+        sys.exit(1)
+
+    if addr_hint:
+        return addr_hint
+
+    print("BLE: scanning for sensors (NUS UUID)...")
+    found = await BleakScanner.discover(timeout=timeout,
+                                        service_uuids=[NUS_SERVICE_UUID])
+    if not found:
+        print("ERROR: no sensor found. Is the board on and not sleeping?")
+        sys.exit(1)
+    if len(found) == 1:
+        print(f"BLE: found {found[0].name}  {found[0].address}")
+        return found[0].address
+
+    print(f"\n{len(found)} sensors found:")
+    for i, d in enumerate(found):
+        print(f"  [{i}] {d.address}  {d.name}")
+    print("Tip: use --ble-addr=<address> to skip this prompt.")
+    choice = input("Select sensor [0]: ").strip()
+    idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
+    return found[idx].address
+
+
+def _ble_lines(addr_hint):
     try:
         import asyncio
-        from bleak import BleakScanner, BleakClient
+        from bleak import BleakClient
     except ImportError:
         print("ERROR: bleak not installed.  pip install bleak")
         sys.exit(1)
@@ -103,19 +136,12 @@ def _ble_lines():
             line_queue.put(line)
 
     async def _run():
-        print("BLE: scanning for MAID...", flush=True)
-        found = await BleakScanner.discover(timeout=8.0,
-                                            service_uuids=[NUS_SERVICE_UUID])
-        if not found:
-            print("ERROR: MAID not found. Is the board on and not sleeping?")
-            sys.exit(1)
-        addr = found[0].address
-        print(f"BLE: found {found[0].name} ({addr})")
+        import asyncio
+        addr = await _ble_find_device(addr_hint)
         async with BleakClient(addr, timeout=10.0) as client:
-            print("BLE: connected — streaming (Ctrl+C to stop)\n")
+            print(f"BLE: connected to {addr} — streaming (Ctrl+C to stop)\n")
             await client.start_notify(NUS_TX_UUID, on_notify)
-            # Signal the main thread that BLE is up
-            line_queue.put(None)
+            line_queue.put(None)  # sentinel: connection ready
             try:
                 while True:
                     await asyncio.sleep(0.2)
@@ -127,11 +153,8 @@ def _ble_lines():
         import asyncio
         asyncio.run(_run())
 
-    t = threading.Thread(target=_thread, daemon=True)
-    t.start()
-
-    # Wait for the "connected" sentinel (None) before yielding lines
-    line_queue.get()
+    threading.Thread(target=_thread, daemon=True).start()
+    line_queue.get()  # wait for connection before yielding
 
     print("Transport: BLE NUS")
     while True:
@@ -147,7 +170,7 @@ def main():
     if not USE_BLE and len(sys.argv) > 1 and sys.argv[1] != "--ble":
         port = sys.argv[1]
 
-    lines = _ble_lines() if USE_BLE else _serial_lines(port)
+    lines = _ble_lines(BLE_ADDR) if USE_BLE else _serial_lines(port)
 
     logs_dir = Path("logs")
     logs_dir.mkdir(exist_ok=True)
