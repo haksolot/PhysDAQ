@@ -266,26 +266,40 @@ def ble_reader():
         print("ERROR: bleak not installed.  pip install bleak")
         sys.exit(1)
 
-    buf = [""]
+    buf        = [""]
+    last_data  = [time.monotonic()]
 
     def on_notify(_, data):
         buf[0] += data.decode("utf-8", errors="replace")
         while "\n" in buf[0]:
             line, buf[0] = buf[0].split("\n", 1)
             process_line(line)
+            last_data[0] = time.monotonic()
+
+    async def _stream(addr):
+        from bleak import BleakClient
+        async with BleakClient(addr, timeout=10.0) as client:
+            await client.start_notify(NUS_TX_UUID, on_notify)
+            while client.is_connected:
+                await asyncio.sleep(0.2)
+                if time.monotonic() - last_data[0] > 10.0:
+                    print("BLE: no data for 10 s — reconnecting...")
+                    break
+            try:
+                await client.stop_notify(NUS_TX_UUID)
+            except Exception:
+                pass
 
     async def _run():
         addr = await _ble_find_device(BLE_ADDR)
-        from bleak import BleakClient
-        async with BleakClient(addr, timeout=10.0) as client:
-            print(f"Transport: BLE NUS ({addr})")
-            await client.start_notify(NUS_TX_UUID, on_notify)
+        print(f"Transport: BLE NUS ({addr})")
+        while True:
             try:
-                while True:
-                    await asyncio.sleep(0.2)
-            except asyncio.CancelledError:
-                pass
-            await client.stop_notify(NUS_TX_UUID)
+                await _stream(addr)
+            except Exception as e:
+                print(f"BLE: {e}")
+            print("BLE: reconnecting in 3 s...")
+            await asyncio.sleep(3.0)
 
     import asyncio
     asyncio.run(_run())

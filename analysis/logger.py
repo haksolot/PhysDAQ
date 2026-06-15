@@ -138,16 +138,25 @@ def _ble_lines(addr_hint):
     async def _run():
         import asyncio
         addr = await _ble_find_device(addr_hint)
-        async with BleakClient(addr, timeout=10.0) as client:
-            print(f"BLE: connected to {addr} — streaming (Ctrl+C to stop)\n")
-            await client.start_notify(NUS_TX_UUID, on_notify)
-            line_queue.put(None)  # sentinel: connection ready
+        connected = False
+        while True:
             try:
-                while True:
-                    await asyncio.sleep(0.2)
-            except asyncio.CancelledError:
-                pass
-            await client.stop_notify(NUS_TX_UUID)
+                async with BleakClient(addr, timeout=10.0) as client:
+                    if not connected:
+                        print(f"BLE: connected to {addr} — streaming (Ctrl+C to stop)\n")
+                        line_queue.put(None)  # sentinel: connection ready
+                        connected = True
+                    await client.start_notify(NUS_TX_UUID, on_notify)
+                    while client.is_connected:
+                        await asyncio.sleep(0.2)
+                    try:
+                        await client.stop_notify(NUS_TX_UUID)
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"BLE: {e}")
+            print("BLE: reconnecting in 3 s...")
+            await asyncio.sleep(3.0)
 
     def _thread():
         import asyncio
