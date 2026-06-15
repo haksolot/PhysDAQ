@@ -60,10 +60,10 @@ log:
 	@PYTHONPATH= $(PYTHON) analysis/logger.py
 
 ble-log:
-	@PYTHONPATH= $(PYTHON) analysis/logger.py --ble
+	@PYTHONPATH= $(PYTHON) analysis/logger.py --ble $(if $(ADDR),--ble-addr=$(ADDR),)
 
 ble-plot:
-	@PYTHONPATH= $(PYTHON) scripts/plotter.py --ble
+	@PYTHONPATH= $(PYTHON) scripts/plotter.py --ble $(if $(ADDR),--ble-addr=$(ADDR),)
 
 process:
 ifndef FILE
