@@ -73,17 +73,28 @@ async def run(addr_hint: str | None) -> None:
             line, buf = buf.split("\n", 1)
             print(line, flush=True)
 
-    print(f"Connecting to {address}...", file=sys.stderr)
-    async with BleakClient(address, timeout=10.0) as client:
-        print("Connected. Streaming (Ctrl+C to stop)...\n", file=sys.stderr)
-        await client.start_notify(NUS_TX_UUID, on_notify)
+    first = True
+    while True:
         try:
-            while True:
-                await asyncio.sleep(0.5)
+            print(f"{'Connecting' if first else 'Reconnecting'} to {address}...", file=sys.stderr)
+            async with BleakClient(address, timeout=10.0) as client:
+                if first:
+                    print("Connected. Streaming (Ctrl+C to stop)...\n", file=sys.stderr)
+                    first = False
+                await client.start_notify(NUS_TX_UUID, on_notify)
+                while client.is_connected:
+                    await asyncio.sleep(0.5)
+                try:
+                    await client.stop_notify(NUS_TX_UUID)
+                except Exception:
+                    pass
         except KeyboardInterrupt:
-            pass
-        await client.stop_notify(NUS_TX_UUID)
-    print("\nDisconnected.", file=sys.stderr)
+            print("\nStopped.", file=sys.stderr)
+            return
+        except Exception as e:
+            print(f"BLE: {e}", file=sys.stderr)
+        print("BLE: disconnected — retrying in 3 s...", file=sys.stderr)
+        await asyncio.sleep(3.0)
 
 
 if __name__ == "__main__":
