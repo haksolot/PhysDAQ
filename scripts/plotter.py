@@ -6,7 +6,11 @@ Layout:
   Left bot  : PPG waveform (Red and IR, raw 18-bit ADC counts)
   Right     : 3D board orientation via Madgwick filter (imufusion)
 
-Dependencies: pip install pyqtgraph PyQt6 pyserial imufusion PyOpenGL
+Transports:
+  make plot      — USB serial (auto-detect)
+  make ble-plot  — BLE NUS (discovers MAID by service UUID)
+
+Dependencies: pip install pyqtgraph PyQt6 pyserial imufusion PyOpenGL bleak
 NOTE: yaw drifts over time without a magnetometer — pitch/roll are stable.
 """
 
@@ -15,7 +19,10 @@ import re
 import time
 import collections
 import threading
+import queue
 import numpy as np
+
+USE_BLE = "--ble" in sys.argv
 
 try:
     import pyqtgraph as pg
@@ -99,7 +106,68 @@ current_quat = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z] — identity
 
 
 # ---------------------------------------------------------------------------
-# Serial port detection
+# Shared sample processing (serial and BLE both feed here)
+# ---------------------------------------------------------------------------
+def process_line(line: str) -> None:
+    global current_quat
+    m = PATTERN.search(line)
+    if not m:
+        return
+    try:
+        red = float(m.group(1))
+        ir  = float(m.group(2))
+        ax, ay, az = float(m.group(3)), float(m.group(4)), float(m.group(5))
+        gx, gy, gz = float(m.group(6)), float(m.group(7)), float(m.group(8))
+    except ValueError:
+        return
+
+    red_buf.append(red)
+    ir_buf.append(ir)
+    gx_buf.append(gx)
+    gy_buf.append(gy)
+    gz_buf.append(gz)
+
+    accel    = np.array([ax, ay, az]) / 9.81
+    gyro_deg = np.array([gx, gy, gz]) * (180.0 / np.pi)
+
+    gyro_norm   = float(np.linalg.norm(np.array([gx, gy, gz])))
+    still_count = process_line._still_count
+    was_still   = process_line._was_still
+
+    if gyro_norm < GYRO_STILL_THRESHOLD:
+        still_count += 1
+    else:
+        still_count = 0
+
+    zupt_active = still_count >= ZUPT_MIN_STILL_SAMPLES
+    if zupt_active != was_still:
+        print("ZUPT: ON — drift frozen" if zupt_active else "ZUPT: OFF — tracking")
+
+    process_line._still_count = still_count
+    process_line._was_still   = zupt_active
+
+    gyro_input = np.zeros(3) if zupt_active else gyro_deg
+
+    try:
+        dt = max(time.monotonic() - process_line._last_t, 1e-4)
+        process_line._last_t = time.monotonic()
+        with ahrs_lock:
+            getattr(ahrs, _UPDATE_METHOD)(gyro_input, accel, dt)
+            q = ahrs.quaternion
+            current_quat[0] = float(q.w)
+            current_quat[1] = float(q.x)
+            current_quat[2] = float(q.y)
+            current_quat[3] = float(q.z)
+    except Exception as e:
+        print(f"AHRS error: {e}")
+
+process_line._still_count = 0
+process_line._was_still   = False
+process_line._last_t      = time.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# Serial transport
 # ---------------------------------------------------------------------------
 def find_xiao_port():
     ports = list(serial.tools.list_ports.comports())
@@ -123,23 +191,15 @@ def find_xiao_port():
     return choice or None
 
 
-# ---------------------------------------------------------------------------
-# Serial reader thread
-# ---------------------------------------------------------------------------
 def serial_reader(port):
-    global current_quat
     try:
         ser = serial.Serial(port, BAUD, timeout=1)
     except serial.SerialException as e:
         print(f"Cannot open {port}: {e}")
         sys.exit(1)
 
-    print(f"Reading from {port} @ {BAUD} baud...")
-    last_t      = time.monotonic()
-    still_count = 0
-    was_still   = False
+    print(f"Transport: USB serial ({port} @ {BAUD})")
     error_count = 0
-
     while True:
         try:
             line = ser.readline().decode("utf-8", errors="replace").strip()
@@ -149,7 +209,7 @@ def serial_reader(port):
             if error_count == 1:
                 print(f"Serial error: {e}")
             if error_count >= 5:
-                print("Too many serial errors — reconnecting...")
+                print("Reconnecting...")
                 try:
                     ser.close()
                 except Exception:
@@ -162,56 +222,55 @@ def serial_reader(port):
                 except serial.SerialException as exc:
                     print(f"Reconnect failed: {exc}")
             continue
+        process_line(line)
 
-        m = PATTERN.search(line)
-        if not m:
-            continue
 
-        try:
-            red = float(m.group(1))
-            ir  = float(m.group(2))
-            ax, ay, az = float(m.group(3)), float(m.group(4)), float(m.group(5))
-            gx, gy, gz = float(m.group(6)), float(m.group(7)), float(m.group(8))
-        except ValueError:
-            continue
+# ---------------------------------------------------------------------------
+# BLE transport
+# ---------------------------------------------------------------------------
+NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
-        now    = time.monotonic()
-        dt     = max(now - last_t, 1e-4)
-        last_t = now
 
-        red_buf.append(red)
-        ir_buf.append(ir)
-        gx_buf.append(gx)
-        gy_buf.append(gy)
-        gz_buf.append(gz)
+def ble_reader():
+    try:
+        import asyncio
+        from bleak import BleakScanner, BleakClient
+    except ImportError:
+        print("ERROR: bleak not installed.  pip install bleak")
+        sys.exit(1)
 
-        # imufusion: accel in g, gyro in °/s — gyro from firmware is rad/s
-        accel    = np.array([ax, ay, az]) / 9.81
-        gyro_deg = np.array([gx, gy, gz]) * (180.0 / np.pi)
+    ready = threading.Event()
+    buf   = [""]
 
-        gyro_norm = float(np.linalg.norm(np.array([gx, gy, gz])))
-        if gyro_norm < GYRO_STILL_THRESHOLD:
-            still_count += 1
-        else:
-            still_count = 0
+    def on_notify(_, data):
+        buf[0] += data.decode("utf-8", errors="replace")
+        while "\n" in buf[0]:
+            line, buf[0] = buf[0].split("\n", 1)
+            process_line(line)
 
-        zupt_active = still_count >= ZUPT_MIN_STILL_SAMPLES
-        if zupt_active != was_still:
-            print("ZUPT: ON — drift frozen" if zupt_active else "ZUPT: OFF — tracking")
-            was_still = zupt_active
+    async def _run():
+        print("BLE: scanning for MAID...")
+        found = await BleakScanner.discover(timeout=8.0,
+                                            service_uuids=[NUS_SERVICE_UUID])
+        if not found:
+            print("ERROR: MAID not found. Is the board on and not sleeping?")
+            sys.exit(1)
+        addr = found[0].address
+        print(f"BLE: found {found[0].name} ({addr})")
+        async with BleakClient(addr, timeout=10.0) as client:
+            print(f"Transport: BLE NUS ({addr})")
+            await client.start_notify(NUS_TX_UUID, on_notify)
+            ready.set()
+            try:
+                while True:
+                    await asyncio.sleep(0.2)
+            except asyncio.CancelledError:
+                pass
+            await client.stop_notify(NUS_TX_UUID)
 
-        gyro_input = np.zeros(3) if zupt_active else gyro_deg
-
-        try:
-            with ahrs_lock:
-                getattr(ahrs, _UPDATE_METHOD)(gyro_input, accel, dt)
-                q = ahrs.quaternion
-                current_quat[0] = float(q.w)
-                current_quat[1] = float(q.x)
-                current_quat[2] = float(q.y)
-                current_quat[3] = float(q.z)
-        except Exception as e:
-            print(f"AHRS error: {e}")
+    import asyncio
+    asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------
@@ -255,11 +314,13 @@ def apply_quat(item, wxyz):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    port = find_xiao_port()
-    if not port:
-        sys.exit(1)
-
-    threading.Thread(target=serial_reader, args=(port,), daemon=True).start()
+    if USE_BLE:
+        threading.Thread(target=ble_reader, daemon=True).start()
+    else:
+        port = find_xiao_port()
+        if not port:
+            sys.exit(1)
+        threading.Thread(target=serial_reader, args=(port,), daemon=True).start()
 
     app = QtWidgets.QApplication(sys.argv)
     pg.setConfigOptions(antialias=True, background="#1e1e2e", foreground="#cdd6f4")

@@ -13,4 +13,5 @@ target_sources(app PRIVATE
     src/imu.c
     src/max30102.c
     src/power.c
+    src/ble.c
 )
