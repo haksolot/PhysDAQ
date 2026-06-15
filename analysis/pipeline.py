@@ -111,10 +111,15 @@ def run_madgwick(df):
 
     for i in range(N):
         getattr(ahrs, update_fn)(gyro_deg[i], accel_g[i], max(float(dt_arr[i]), 1e-4))
-        q         = ahrs.quaternion
-        quats[i]  = [q.w, q.x, q.y, q.z]
-        e         = ahrs.euler
-        eulers[i] = [e.roll, e.pitch, e.yaw]
+        q        = ahrs.quaternion
+        w, x, y, z = q.w, q.x, q.y, q.z
+        quats[i] = [w, x, y, z]
+
+        # Quaternion → Euler (intrinsic ZYX / NWU convention), degrees
+        roll  = np.degrees(np.arctan2(2*(w*x + y*z), 1 - 2*(x*x + y*y)))
+        pitch = np.degrees(np.arcsin(np.clip(2*(w*y - z*x), -1, 1)))
+        yaw   = np.degrees(np.arctan2(2*(w*z + x*y), 1 - 2*(y*y + z*z)))
+        eulers[i] = [roll, pitch, yaw]
 
     return quats, eulers
 
