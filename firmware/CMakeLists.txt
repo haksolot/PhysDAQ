@@ -12,4 +12,5 @@ target_sources(app PRIVATE
     src/led.c
     src/imu.c
     src/max30102.c
+    src/power.c
 )

@@ -87,11 +87,25 @@ int max30102_init(void)
 		return -ENODEV;
 	}
 
-	/* Allow device to complete power-on reset before first I2C access */
-	k_sleep(K_MSEC(100));
+	/* Allow 3V3 rail and device to stabilise.  After an nRF System Off wake
+	 * or a programming reset the bus pins float (HiZ) for a brief window,
+	 * which can leave the MAX30102 mid-transaction. */
+	k_sleep(K_MSEC(200));
 
-	/* ① Software reset */
-	ret = reg_write(REG_MODE_CONFIG, MODE_RESET);
+	/* Send 9 SCL pulses + STOP to unstick SDA if the bus is hung.
+	 * Returns -ENOSYS if the driver doesn't implement it — safe to ignore. */
+	i2c_recover_bus(dev_i2c.bus);
+	k_sleep(K_MSEC(10));
+
+	/* ① Software reset — retry up to 5× for post-wake transient NAKs */
+	ret = -EIO;
+	for (int i = 0; i < 5; i++) {
+		ret = reg_write(REG_MODE_CONFIG, MODE_RESET);
+		if (ret == 0) {
+			break;
+		}
+		k_sleep(K_MSEC(20));
+	}
 	if (ret < 0) {
 		printk("MAX30102: I2C error during reset (%d)\n", ret);
 		return -EIO;
@@ -198,4 +212,10 @@ int max30102_fetch(struct ppg_sample *out)
 		    (uint32_t)buf[4] <<  8 |
 		    (uint32_t)buf[5]) & FIFO_DATA_MASK;
 	return 0;
+}
+
+void max30102_shutdown(void)
+{
+	reg_write(REG_MODE_CONFIG, 0x80); /* SHDN bit — LEDs off, ~0.7 µA */
+	printk("MAX30102: shutdown\n");
 }
