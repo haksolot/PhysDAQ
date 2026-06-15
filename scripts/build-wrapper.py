@@ -6,9 +6,10 @@ import sys
 import shutil
 import subprocess
 
-BOARD = sys.argv[1] if len(sys.argv) > 1 else "xiao_ble_sense"
-APP = sys.argv[2] if len(sys.argv) > 2 else "firmware"
-BUILD = "build"
+BOARD    = sys.argv[1] if len(sys.argv) > 1 else "xiao_ble_sense"
+APP      = sys.argv[2] if len(sys.argv) > 2 else "firmware"
+PRISTINE = "always" if "--pristine" in sys.argv else "auto"
+BUILD    = "build"
 
 
 def is_stale_build():
@@ -51,7 +52,7 @@ def main():
         print("    . .\\scripts\\setup-env.ps1   (inside that shell)")
         sys.exit(1)
 
-    cmd = ["west", "build", "-p", "-b", BOARD, APP]
+    cmd = ["west", "build", "--pristine", PRISTINE, "-b", BOARD, APP]
     print(f"[build-wrapper] Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
     print(f"[build-wrapper] OK: {BUILD}/zephyr/zephyr.uf2")

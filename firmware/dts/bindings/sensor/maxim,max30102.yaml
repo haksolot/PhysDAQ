@@ -1,0 +1,11 @@
+description: MAX30102 pulse oximeter and heart-rate sensor
+
+compatible: "maxim,max30102"
+
+include: [sensor-device.yaml, i2c-device.yaml]
+
+properties:
+  int-gpios:
+    type: phandle-array
+    required: true
+    description: Active-low data-ready interrupt from MAX30102 INT pin

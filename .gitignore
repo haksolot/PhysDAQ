@@ -14,3 +14,6 @@ tools/
 *.pyc
 __pycache__/
 .venv/
+
+# Sensor logs (raw + processed CSV — can be large)
+logs/*.csv

@@ -1,19 +1,30 @@
 /*
- * XIAO BLE Sense board overlay
- * Defines the onboard red LED on P0.26
- * Note: LSM6DS3TR-C IMU is already defined in xiao_ble_sense.dts (i2c0 @ 0x6A)
+ * XIAO BLE Sense overlay — MAID PPG + IMU
+ *
+ * I2C0 @ 0x6A : LSM6DS3TR-C IMU  (pinctrl: SDA=P0.07, SCL=P0.27; unchanged)
+ * I2C1 @ 0x57 : MAX30102 PPG     (pinctrl: SDA=D4/P0.04, SCL=D5/P0.05)
+ * D1  / P0.03 : MAX30102 INT (active LOW, open-drain, internal pull-up)
+ *
+ * The MAXREFDES117# eval board has no accessible EN/SHDN pin — the MAX30102
+ * is always powered when VIN is connected.  No load-switch control needed.
+ *
+ * LED0 (P0.26 red), LED1 (P0.30 green), LED2 (P0.06 blue) are defined in
+ * xiao_ble_common.dtsi and are not redefined here.
  */
 
-/ {
-    aliases {
-        led0 = &led0;
-    };
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
 
-    leds {
-        compatible = "gpio-leds";
-        led0: led_0 {
-            gpios = <&gpio0 26 GPIO_ACTIVE_LOW>;
-            label = "Red LED";
-        };
-    };
+/* Add MAX30102 child to the already-enabled I2C1 bus.
+ * i2c1 uses nordic,nrf-twi with pinctrl already configured in
+ * xiao_ble-pinctrl.dtsi (SDA=P0.04/D4, SCL=P0.05/D5). */
+&i2c1 {
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+
+	max30102: max30102@57 {
+		compatible = "maxim,max30102";
+		reg = <0x57>;
+		int-gpios = <&gpio0 3 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		status = "okay";
+	};
 };

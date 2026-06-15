@@ -664,3 +664,105 @@ git commit -m "chore: restructure as OS-agnostic Zephyr repo with Makefile"
 - The `zephyr-env.ps1` at repo root must be deleted (replaced by `scripts/setup-env.ps1`).
 - `make` on Windows requires the MinGW `make.exe` bundled with the Nordic toolchain, or GNU Make from Git Bash / MSYS2. The `scripts/setup-env.ps1` adds MinGW to PATH.
 - If the user prefers `nmake` or another build system, the Python scripts in `scripts/` can still be invoked directly: `python3 scripts/build-wrapper.py`, `python3 scripts/uf2-flash.py`, etc.
+
+---
+
+## Hardware Reference — MAID Wearable
+
+### Bill of Materials
+
+| Component | Part | Role |
+|-----------|------|------|
+| MCU board | Seeed Studio XIAO nRF52840 Sense | Main controller + onboard IMU |
+| PPG module | MAXREFDES117# eval board | MAX30102 pulse oximeter |
+
+---
+
+### XIAO nRF52840 Sense — Connector Pin Map
+
+Verified against `seeed_xiao_connector.dtsi` and `xiao_ble-pinctrl.dtsi`.
+
+| Connector | nRF52840 pin | Alternate function | Connected to |
+|-----------|-------------|-------------------|--------------|
+| D0 | P0.02 | GPIO | MAX30102 load-switch EN |
+| D1 | P0.03 | GPIO | MAX30102 INT |
+| D2 | P0.28 | GPIO | — |
+| D3 | P0.29 | GPIO / ADC | — |
+| D4 | **P0.04** | I2C1 SDA | MAX30102 SDA |
+| D5 | **P0.05** | I2C1 SCL | MAX30102 SCL |
+| D6 | P1.11 | UART TX | — |
+| D7 | P1.12 | UART RX | — |
+| 3V3 | — | Power | MAX30102 VCC (via load switch) |
+| GND | — | Ground | MAX30102 GND |
+
+> ⚠️ **Common mistake:** D4 = P0.04, D5 = P0.05 — NOT P0.26/P0.27.
+> P0.26 is the onboard **red LED**, which does not conflict with I2C1.
+
+**Onboard LEDs** (already defined in `xiao_ble_common.dtsi`, no overlay needed):
+
+| Alias | Pin | Color |
+|-------|-----|-------|
+| led0 | P0.26 | Red |
+| led1 | P0.30 | Green |
+| led2 | P0.06 | Blue |
+
+---
+
+### I2C Bus Layout
+
+| Bus | Compatible | Pins | Device | I2C address |
+|-----|-----------|------|--------|-------------|
+| i2c0 | `nordic,nrf-twim` | SDA=P0.07, SCL=P0.27 | LSM6DS3TR-C (IMU, onboard) | 0x6A |
+| i2c1 | `nordic,nrf-twi` | SDA=D4/P0.04, SCL=D5/P0.05 | MAX30102 (PPG, external) | 0x57 |
+
+i2c0 is wired internally on the board (not exposed on the connector).
+i2c1 is the external connector bus; its pinctrl is defined in `xiao_ble-pinctrl.dtsi`.
+
+---
+
+### MAX30102 PPG Module — MAXREFDES117#
+
+**Power control:**
+- The MAXREFDES117# has **no accessible EN/SHDN pin** — confirmed by hardware debugging and Maxim documentation.
+- The MAX30102 is always powered when VIN is connected. No software power gating on this module.
+- D0/P0.02 is **not used** — do not add EN gpio to DTS or firmware.
+
+**INT pin:**
+- Active LOW, open-drain. Must have pull-up (configured via `GPIO_PULL_UP` in DTS).
+- Wired to D1/P0.03.
+- Triggers on `PPG_RDY` (one interrupt per new FIFO sample at 100 Hz).
+
+**Firmware configuration (current):**
+
+| Parameter | Value |
+|-----------|-------|
+| Mode | SpO2 (Red + IR) |
+| Sample rate | 100 Hz |
+| ADC resolution | 18-bit |
+| LED pulse width | 411 µs |
+| LED amplitude (Red + IR) | 0x1F ≈ 6.2 mA |
+| Part ID (register 0xFF) | 0x15 |
+
+**Driver:** custom register-level I2C driver in `firmware/src/max30102.c`.
+No Zephyr native MAX30102 driver used — interrupt-driven FIFO reads via `K_SEM_DEFINE`.
+DTS binding: `firmware/dts/bindings/sensor/maxim,max30102.yaml`.
+
+---
+
+### IMU — LSM6DS3TR-C (onboard)
+
+- Bound in Zephyr DTS as `compatible = "st,lsm6dsl"` (compatible superset).
+- Located at `i2c0 @ 0x6A`, powered via a regulator-fixed node (`LSM6DS3TR_C_EN` on P1.08).
+- Driver: Zephyr built-in `CONFIG_LSM6DSL=y`.
+- Configured at 104 Hz ODR for both accelerometer and gyroscope.
+- Wrapper: `firmware/src/imu.c` — exposes `imu_init()`, `imu_print_sample()`, `imu_fetch_sample()`.
+
+---
+
+### Output Format (current firmware)
+
+```
+PPG red=<18-bit> ir=<18-bit> | IMU ax=±X.XXX ay=±X.XXX az=±X.XXX gx=±X.XXX gy=±X.XXX gz=±X.XXX
+```
+
+IMU units: accel in m/s², gyro in dps. Values formatted as integer.milli (3 decimal places).
