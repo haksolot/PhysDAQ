@@ -3,6 +3,7 @@
 #include <zephyr/drivers/sensor.h>
 #include "imu.h"
 #include "max30102.h"
+#include "power.h"
 
 /* Format a sensor_value (val1 + val2/1e6) as "±integer.milli" using printk.
  * Mirrors the print_val helper in imu.c, kept local to avoid coupling. */
@@ -21,9 +22,13 @@ int main(void)
         return 0;
     }
 
+    power_init();
+
     printk("\n=== MAID: PPG + IMU acquisition ===\n");
     printk("PPG: SpO2 mode, 100 Hz, 18-bit ADC\n");
-    printk("IMU: accel [m/s^2], gyro [dps]\n\n");
+    printk("IMU: accel [m/s^2], gyro [rad/s]\n");
+    printk("Power: sleep after %d s idle (CONFIG_MAID_IDLE_TIMEOUT_SEC)\n\n",
+           CONFIG_MAID_IDLE_TIMEOUT_SEC);
 
     while (1) {
         /* Block until the MAX30102 PPG_RDY interrupt fires.
@@ -52,6 +57,8 @@ int main(void)
                    SV_SIGN(&imu.gyro[0]),  SV_INT(&imu.gyro[0]),  SV_MILLI(&imu.gyro[0]),
                    SV_SIGN(&imu.gyro[1]),  SV_INT(&imu.gyro[1]),  SV_MILLI(&imu.gyro[1]),
                    SV_SIGN(&imu.gyro[2]),  SV_INT(&imu.gyro[2]),  SV_MILLI(&imu.gyro[2]));
+
+            power_update(imu.gyro);
         }
     }
 

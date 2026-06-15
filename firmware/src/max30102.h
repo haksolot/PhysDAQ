@@ -22,4 +22,8 @@ int max30102_wait_ready(k_timeout_t timeout);
  * Returns 0 on success, -ENODATA if the FIFO is empty, -EIO on bus error. */
 int max30102_fetch(struct ppg_sample *out);
 
+/* Set the SHDN bit in MODE_CONFIG — cuts LED drive and ADC; the chip stays
+ * on I2C but draws ~0.7 µA.  Call before entering deep sleep. */
+void max30102_shutdown(void);
+
 #endif /* MAX30102_H */

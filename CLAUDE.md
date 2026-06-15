@@ -765,4 +765,33 @@ DTS binding: `firmware/dts/bindings/sensor/maxim,max30102.yaml`.
 PPG red=<18-bit> ir=<18-bit> | IMU ax=±X.XXX ay=±X.XXX az=±X.XXX gx=±X.XXX gy=±X.XXX gz=±X.XXX
 ```
 
-IMU units: accel in m/s², gyro in dps. Values formatted as integer.milli (3 decimal places).
+IMU units: accel in m/s², gyro in **rad/s** (Zephyr sensor API output — NOT dps). Values formatted as integer.milli (3 decimal places).
+
+Every 5 seconds while idle, a status line is printed:
+```
+Power: idle Xs/30s | peak ~Xmrad/s (thresh 100mrad/s)
+```
+
+---
+
+### Power Management
+
+The firmware enters **nRF System Off** (~0.4 µA) after a configurable period of gyro inactivity.
+
+**Sleep sequence:**
+1. No gyro motion above 0.1 rad/s for `CONFIG_MAID_IDLE_TIMEOUT_SEC` seconds
+2. MAX30102 set to SHDN mode (LEDs off, ~0.7 µA, I2C still alive)
+3. LSM6DS3TR-C reconfigured to accel-only 26 Hz wake-up detection on INT1 (P0.11)
+4. nRF enters System Off via `nrf_power_system_off()` — all GPIO go HiZ
+
+**Wake sequence:**
+- Physical movement → IMU asserts INT1 HIGH → nRF GPIO sense DETECT → full CPU reset
+- Firmware boots from scratch; sensors re-initialise normally
+- The USB-CDC serial port disappears during sleep and reappears on wake — restart `make term` after waking
+
+**Configuring the timeout:**
+Edit `firmware/prj.conf`:
+```
+CONFIG_MAID_IDLE_TIMEOUT_SEC=30   # change this value, then make build && make flash
+```
+Range 5–300 s. No source code changes needed.

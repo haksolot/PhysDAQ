@@ -1,0 +1,13 @@
+mainmenu "MAID Wearable"
+
+source "Kconfig.zephyr"
+
+config MAID_IDLE_TIMEOUT_SEC
+	int "Seconds of no motion before deep sleep"
+	default 30
+	range 5 300
+	help
+	  The device enters deep sleep (system off, ~0.4 µA) after this many
+	  consecutive seconds without detected gyroscope motion.
+	  Wake-up is triggered by the LSM6DS3TR-C activity interrupt on INT1.
+	  Change in prj.conf: CONFIG_MAID_IDLE_TIMEOUT_SEC=<value>
