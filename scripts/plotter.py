@@ -280,6 +280,8 @@ def ble_reader():
         from bleak import BleakClient
         async with BleakClient(addr, timeout=10.0) as client:
             await client.start_notify(NUS_TX_UUID, on_notify)
+            last_data[0] = time.monotonic()  # start watchdog only after subscribe
+            print(f"Transport: BLE NUS ({addr}) — streaming")
             while client.is_connected:
                 await asyncio.sleep(0.2)
                 if time.monotonic() - last_data[0] > 10.0:
@@ -292,7 +294,6 @@ def ble_reader():
 
     async def _run():
         addr = await _ble_find_device(BLE_ADDR)
-        print(f"Transport: BLE NUS ({addr})")
         while True:
             try:
                 await _stream(addr)
