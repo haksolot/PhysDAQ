@@ -1,41 +1,58 @@
 #include <zephyr/kernel.h>
-#include <zephyr/drivers/uart.h>
 #include <zephyr/sys/printk.h>
-#include "led.h"
+#include <zephyr/drivers/sensor.h>
 #include "imu.h"
+#include "max30102.h"
 
-static const struct device *uart = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+/* Format a sensor_value (val1 + val2/1e6) as "±integer.milli" using printk.
+ * Mirrors the print_val helper in imu.c, kept local to avoid coupling. */
+#define SV_SIGN(v)  (((v)->val1 < 0 || (v)->val2 < 0) ? "-" : "")
+#define SV_INT(v)   ((v)->val1 < 0 ? -(v)->val1 : (v)->val1)
+#define SV_MILLI(v) (((v)->val2 < 0 ? -(v)->val2 : (v)->val2) / 1000)
 
 int main(void)
 {
-    if (led_init() < 0) return 0;
-
-    if (!device_is_ready(uart)) {
-        printk("UART not ready\n");
+    if (imu_init() < 0) {
         return 0;
     }
 
-    if (imu_init() < 0) return 0;
+    if (max30102_init() < 0) {
+        printk("MAX30102 init failed — halting\n");
+        return 0;
+    }
 
-    printk("\n=== Xiao Sense IMU ===\n");
-    printk("Colors: r=red  g=green  b=blue  w=white  0=off\n");
-    printk("Streaming accel + gyro @ 20 Hz...\n\n");
+    printk("\n=== MAID: PPG + IMU acquisition ===\n");
+    printk("PPG: SpO2 mode, 100 Hz, 18-bit ADC\n");
+    printk("IMU: accel [m/s^2], gyro [dps]\n\n");
 
     while (1) {
-        imu_print_sample();
-
-        unsigned char c;
-        if (uart_poll_in(uart, &c) == 0) {
-            switch (c) {
-            case 'r': led_set(1,0,0); printk(">>> RED\n");   break;
-            case 'g': led_set(0,1,0); printk(">>> GREEN\n"); break;
-            case 'b': led_set(0,0,1); printk(">>> BLUE\n");  break;
-            case 'w': led_set(1,1,1); printk(">>> WHITE\n"); break;
-            case '0': led_off();      printk(">>> OFF\n");   break;
-            }
+        /* Block until the MAX30102 PPG_RDY interrupt fires.
+         * A 500 ms timeout guards against a stalled sensor. */
+        if (max30102_wait_ready(K_MSEC(500)) < 0) {
+            continue;
         }
 
-        k_sleep(K_MSEC(50));
+        /* Drain all samples that arrived since the last wake-up.
+         * Normally one sample per interrupt; FIFO can hold up to 32. */
+        struct ppg_sample ppg;
+        struct imu_sample imu;
+
+        while (max30102_fetch(&ppg) == 0) {
+            if (imu_fetch_sample(&imu) < 0) {
+                continue;
+            }
+
+            printk("PPG red=%u ir=%u | IMU "
+                   "ax=%s%d.%03d ay=%s%d.%03d az=%s%d.%03d "
+                   "gx=%s%d.%03d gy=%s%d.%03d gz=%s%d.%03d\n",
+                   ppg.red, ppg.ir,
+                   SV_SIGN(&imu.accel[0]), SV_INT(&imu.accel[0]), SV_MILLI(&imu.accel[0]),
+                   SV_SIGN(&imu.accel[1]), SV_INT(&imu.accel[1]), SV_MILLI(&imu.accel[1]),
+                   SV_SIGN(&imu.accel[2]), SV_INT(&imu.accel[2]), SV_MILLI(&imu.accel[2]),
+                   SV_SIGN(&imu.gyro[0]),  SV_INT(&imu.gyro[0]),  SV_MILLI(&imu.gyro[0]),
+                   SV_SIGN(&imu.gyro[1]),  SV_INT(&imu.gyro[1]),  SV_MILLI(&imu.gyro[1]),
+                   SV_SIGN(&imu.gyro[2]),  SV_INT(&imu.gyro[2]),  SV_MILLI(&imu.gyro[2]));
+        }
     }
 
     return 0;

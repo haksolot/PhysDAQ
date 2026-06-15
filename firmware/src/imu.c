@@ -49,3 +49,13 @@ void imu_print_sample(void)
     print_val("T", &temp);
     printk("\n");
 }
+
+int imu_fetch_sample(struct imu_sample *out)
+{
+    if (sensor_sample_fetch(imu) < 0) {
+        return -1;
+    }
+    sensor_channel_get(imu, SENSOR_CHAN_ACCEL_XYZ, out->accel);
+    sensor_channel_get(imu, SENSOR_CHAN_GYRO_XYZ,  out->gyro);
+    return 0;
+}
