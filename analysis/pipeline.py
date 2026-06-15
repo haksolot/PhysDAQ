@@ -81,6 +81,64 @@ def lowpass(sig, cutoff, fs=FS, order=FILTER_ORDER):
     return sosfiltfilt(sos, sig)
 
 
+def motion_cancel(ppg_filt, accel_xyz_filt, order=8):
+    """Wiener-optimal motion artifact removal via least-squares regression.
+
+    Models the motion artifact as a linear combination of `order` delayed
+    samples of each accel axis and subtracts the optimal estimate from ppg.
+    Both inputs must already be bandpass-filtered to the PPG band.
+
+    order=8 @ 100 Hz covers 80 ms of motion lag — sufficient for wrist motion.
+    """
+    N    = len(ppg_filt)
+    cols = []
+    for ch in range(3):
+        for d in range(order):
+            col = np.roll(accel_xyz_filt[:, ch], d)
+            col[:d] = 0.0
+            cols.append(col)
+    X       = np.column_stack(cols)         # (N, 3*order)
+    coeffs, _, _, _ = np.linalg.lstsq(X, ppg_filt, rcond=None)
+    return ppg_filt - X @ coeffs
+
+
+def spectral_bpm(signal, accel_mag, fs=FS, window_s=8.0, step_s=2.0):
+    """Sliding-window FFT heart rate estimator (motion-robust).
+
+    Suppresses FFT bins where the accelerometer spectrum dominates so the
+    selected peak corresponds to the cardiac frequency, not motion.
+
+    Returns (times_s, bpms) arrays aligned to window centres.
+    """
+    win  = int(window_s * fs)
+    step = int(step_s  * fs)
+    N    = len(signal)
+    if N < win:
+        return np.array([]), np.array([])
+
+    freqs = np.fft.rfftfreq(win, 1.0 / fs)
+    band  = (freqs >= PPG_LOW_HZ) & (freqs <= 3.5)
+    hann  = np.hanning(win)
+
+    times, bpms = [], []
+    for start in range(0, N - win, step):
+        ppg_spec   = np.abs(np.fft.rfft(signal[start:start + win]    * hann))
+        accel_spec = np.abs(np.fft.rfft(accel_mag[start:start + win] * hann))
+
+        ppg_spec   /= (ppg_spec[band].max()   + 1e-10)
+        accel_spec /= (accel_spec[band].max() + 1e-10)
+
+        # Penalise bins dominated by motion before peak selection
+        score        = np.clip(ppg_spec - 0.5 * accel_spec, 0, None)
+        score[~band] = 0
+
+        bpm = freqs[np.argmax(score)] * 60.0
+        times.append((start + win // 2) / fs)
+        bpms.append(bpm)
+
+    return np.array(times), np.array(bpms)
+
+
 # ── Madgwick orientation ──────────────────────────────────────────────────────
 def run_madgwick(df):
     """Returns (quats N×4 [w,x,y,z], eulers N×3 [roll,pitch,yaw] degrees)."""
@@ -218,15 +276,27 @@ def main():
     accel_mag = np.linalg.norm(dynamic_g, axis=1)
     motion    = accel_mag > MOTION_THRESH_G
 
-    # ── Beat metrics ───────────────────────────────────────────────────────────
+    # ── Motion artifact removal ────────────────────────────────────────────────
+    print("Removing motion artifacts (Wiener regression)...")
+    accel_filt = np.column_stack([
+        bandpass(accel_g[:, k], PPG_LOW_HZ, PPG_HIGH_HZ) for k in range(3)
+    ])
+    ir_clean  = motion_cancel(ir_filt,  accel_filt)
+    red_clean = motion_cancel(red_filt, accel_filt)
+
+    # ── Spectral BPM track (motion-robust FFT) ─────────────────────────────────
+    print("Computing spectral BPM track...")
+    bpm_times, bpm_vals = spectral_bpm(ir_clean, accel_mag)
+
+    # ── Beat metrics (on cleaned signal) ──────────────────────────────────────
     print("Detecting heartbeats...")
     ts       = df["timestamp"].to_numpy()
-    beats_df = compute_beats(ts, ir_filt, red_filt, ir_dc, red_dc, motion)
+    beats_df = compute_beats(ts, ir_clean, red_clean, ir_dc, red_dc, motion)
 
     if not beats_df.empty:
         mean_bpm = beats_df["bpm"].mean()
         clean    = beats_df[beats_df["motion_artifact"] == 0]
-        print(f"  {len(beats_df)} beats  —  avg BPM: {mean_bpm:.1f}"
+        print(f"  {len(beats_df)} beats  —  avg BPM (peak): {mean_bpm:.1f}"
               f"  ({len(clean)} clean / {len(beats_df) - len(clean)} with motion artifact)")
         if not clean.empty and clean["spo2_pct"].replace("", float("nan")).notna().any():
             spo2_vals = pd.to_numeric(clean["spo2_pct"], errors="coerce").dropna()
@@ -236,10 +306,17 @@ def main():
     else:
         print("  No beats detected — was the finger on the sensor during recording?")
 
+    if len(bpm_vals) > 0:
+        print(f"  Spectral BPM: {bpm_vals.mean():.1f} avg  "
+              f"[{bpm_vals.min():.1f}–{bpm_vals.max():.1f}]  "
+              f"over {len(bpm_vals)} windows")
+
     # ── Build enriched per-sample CSV ──────────────────────────────────────────
     enriched = df.copy()
     enriched["red_filt"]    = np.round(red_filt,      2)
     enriched["ir_filt"]     = np.round(ir_filt,       2)
+    enriched["ir_clean"]    = np.round(ir_clean,      2)   # motion-cancelled IR
+    enriched["red_clean"]   = np.round(red_clean,     2)   # motion-cancelled Red
     enriched["red_dc"]      = np.round(red_dc,        2)
     enriched["ir_dc"]       = np.round(ir_dc,         2)
     enriched["roll_deg"]    = np.round(eulers[:, 0],  3)
@@ -263,6 +340,12 @@ def main():
     if not beats_df.empty:
         beats_df.to_csv(beats_path, index=False)
         print(f"Saved: {beats_path}")
+
+    if len(bpm_vals) > 0:
+        spectral_path = in_path.parent / f"{stem}_bpm_spectral.csv"
+        pd.DataFrame({"time_s": np.round(bpm_times, 2),
+                      "bpm":    np.round(bpm_vals,  1)}).to_csv(spectral_path, index=False)
+        print(f"Saved: {spectral_path}")
 
 
 if __name__ == "__main__":

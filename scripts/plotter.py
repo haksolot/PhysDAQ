@@ -53,6 +53,13 @@ except ImportError:
     print("ERROR: pyserial not installed.\nInstall: pip install pyserial")
     sys.exit(1)
 
+try:
+    from scipy.signal import butter, sosfiltfilt
+    _SCIPY_OK = True
+except ImportError:
+    print("WARNING: scipy not installed — live filtered PPG disabled.  pip install scipy")
+    _SCIPY_OK = False
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -70,6 +77,32 @@ PATTERN = re.compile(
     r'ax=(-?[\d.]+)\s+ay=(-?[\d.]+)\s+az=(-?[\d.]+)\s+'
     r'gx=(-?[\d.]+)\s+gy=(-?[\d.]+)\s+gz=(-?[\d.]+)'
 )
+
+# ---------------------------------------------------------------------------
+# Real-time DSP helpers
+# ---------------------------------------------------------------------------
+if _SCIPY_OK:
+    _BP_SOS = butter(4, [0.5, 3.5], btype="band", fs=SAMPLE_RATE, output="sos")
+
+def rt_bandpass(arr):
+    """Zero-phase bandpass on numpy array; returns zeros if scipy missing."""
+    if not _SCIPY_OK or len(arr) < 20:
+        return np.zeros_like(arr)
+    return sosfiltfilt(_BP_SOS, arr)
+
+
+def rt_bpm(arr_filt):
+    """FFT-based BPM from a bandpassed window; returns None if unreliable."""
+    if len(arr_filt) < 50:
+        return None
+    hann  = np.hanning(len(arr_filt))
+    spec  = np.abs(np.fft.rfft(arr_filt * hann))
+    freqs = np.fft.rfftfreq(len(arr_filt), 1.0 / SAMPLE_RATE)
+    band  = (freqs >= 0.5) & (freqs <= 3.5)
+    if not band.any() or spec[band].max() < 1e-6:
+        return None
+    return float(freqs[band][np.argmax(spec[band])]) * 60.0
+
 
 # ---------------------------------------------------------------------------
 # Shared state (serial thread → UI thread)
@@ -403,8 +436,14 @@ def main():
     ppg_plot.setLabel("left", "ADC counts")
     ppg_plot.setLabel("bottom", f"derniers {WINDOW} échantillons  (@{SAMPLE_RATE} Hz = {WINDOW//SAMPLE_RATE}s)")
     ppg_plot.addLegend(offset=(10, 10))
-    c_red = ppg_plot.plot(xs, list(red_buf), pen=pg.mkPen("#f38ba8", width=2), name="Red")
-    c_ir  = ppg_plot.plot(xs, list(ir_buf),  pen=pg.mkPen("#cba6f7", width=2), name="IR")
+    c_red     = ppg_plot.plot(xs, list(red_buf), pen=pg.mkPen("#f38ba8", width=2), name="Red")
+    c_ir      = ppg_plot.plot(xs, list(ir_buf),  pen=pg.mkPen("#cba6f7", width=2), name="IR")
+    # Filtered IR overlaid — scaled to IR amplitude so it's visible on same axis
+    c_ir_filt = ppg_plot.plot(xs, list(ir_buf),  pen=pg.mkPen("#89dceb", width=2), name="IR filtré")
+    bpm_label = pg.TextItem("BPM: —", color="#a6e3a1", anchor=(1, 0))
+    bpm_label.setFont(pg.Qt.QtGui.QFont("monospace", 14, pg.Qt.QtGui.QFont.Weight.Bold))
+    ppg_plot.addItem(bpm_label)
+    bpm_label.setPos(WINDOW - 1, 0)
     left_layout.addWidget(ppg_plot, stretch=1)
 
     layout.addWidget(left_widget, stretch=2)
@@ -440,8 +479,24 @@ def main():
         c_gx.setData(xs, list(gx_buf))
         c_gy.setData(xs, list(gy_buf))
         c_gz.setData(xs, list(gz_buf))
-        c_red.setData(xs, list(red_buf))
-        c_ir.setData(xs, list(ir_buf))
+
+        ir_arr  = np.array(ir_buf)
+        red_arr = np.array(red_buf)
+        c_red.setData(xs, red_arr)
+        c_ir.setData(xs, ir_arr)
+
+        # Real-time filtered IR — bandpass then scale to match raw IR range
+        ir_filt = rt_bandpass(ir_arr)
+        if ir_filt.any():
+            ir_std = ir_arr.std()
+            scale  = ir_std / (ir_filt.std() + 1e-10) if ir_std > 0 else 1.0
+            c_ir_filt.setData(xs, ir_filt * scale + ir_arr.mean())
+
+        # BPM from FFT of filtered window
+        bpm = rt_bpm(ir_filt)
+        bpm_label.setText(f"BPM: {bpm:.0f}" if bpm else "BPM: —")
+        # Anchor label to top-right of current IR range
+        bpm_label.setPos(WINDOW - 1, float(ir_arr.max()))
 
         with ahrs_lock:
             q = current_quat.copy()
