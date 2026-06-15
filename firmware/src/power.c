@@ -6,6 +6,7 @@
 #include <hal/nrf_power.h>
 #include "power.h"
 #include "max30102.h"
+#include "ble.h"
 
 /* Motion threshold: 0.1 rad/s (≈ 5.7 °/s).
  * Compared as squared magnitude to avoid sqrtf.
@@ -51,6 +52,10 @@ static void enter_sleep(void)
 	printk("Power: %d s idle — entering deep sleep (wake on motion)\n",
 	       CONFIG_MAID_IDLE_TIMEOUT_SEC);
 	k_sleep(K_MSEC(20));
+
+	/* Shut down BLE before System Off — the nRF BLE controller must be idle
+	 * before nrf_power_system_off() or the call may be ignored. */
+	ble_stop();
 
 	max30102_shutdown();
 	configure_imu_wakeup();

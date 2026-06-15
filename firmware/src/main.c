@@ -64,7 +64,16 @@ int main(void)
                 SV_SIGN(&imu.gyro[2]),  SV_INT(&imu.gyro[2]),  SV_MILLI(&imu.gyro[2]));
 
             printk("%s", line);
-            ble_send((const uint8_t *)line, n);
+
+            /* BLE link can carry ~4 kB/s at default Windows connection params.
+             * 100 Hz × 120 B = 12 kB/s would overflow the TX queue instantly.
+             * Cap at one notification per 40 ms (~25 Hz) — plenty for display. */
+            static int64_t ble_last_ms;
+            int64_t now_ms = k_uptime_get();
+            if (now_ms - ble_last_ms >= 40) {
+                ble_last_ms = now_ms;
+                ble_send((const uint8_t *)line, n);
+            }
 
             power_update(imu.gyro);
         }
