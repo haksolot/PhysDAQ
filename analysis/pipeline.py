@@ -52,11 +52,13 @@ except ImportError:
     sys.exit(1)
 
 # ── DSP parameters ────────────────────────────────────────────────────────────
-FS           = 100.0   # Hz — MAX30102 sample rate
-PPG_LOW_HZ   = 0.5    # bandpass lower edge (30 BPM)
-PPG_HIGH_HZ  = 4.0    # bandpass upper edge (240 BPM)
-PPG_DC_HZ    = 0.1    # low-pass for DC baseline
-FILTER_ORDER = 4
+FS             = 100.0  # Hz — MAX30102 sample rate
+PPG_LOW_HZ     = 0.5   # bandpass lower edge (30 BPM)
+PPG_HIGH_HZ    = 8.0   # bandpass upper edge — 8 Hz preserves up to 6th harmonic
+                        # at 80 BPM (1.33 Hz × 6 = 8 Hz), giving proper pulse shape
+MOTION_HIGH_HZ = 3.5   # accel reference bandpass — only motion band, not cardiac harmonics
+PPG_DC_HZ      = 0.1   # low-pass for DC baseline
+FILTER_ORDER   = 4
 
 # Motion detection: dynamic accel magnitude threshold (g, gravity removed)
 MOTION_THRESH_G = 0.05
@@ -278,8 +280,10 @@ def main():
 
     # ── Motion artifact removal ────────────────────────────────────────────────
     print("Removing motion artifacts (Wiener regression)...")
+    # Accel reference band-limited to motion frequencies only (not cardiac harmonics)
+    # to avoid regressing out the heartbeat signal itself.
     accel_filt = np.column_stack([
-        bandpass(accel_g[:, k], PPG_LOW_HZ, PPG_HIGH_HZ) for k in range(3)
+        bandpass(accel_g[:, k], PPG_LOW_HZ, MOTION_HIGH_HZ) for k in range(3)
     ])
     ir_clean  = motion_cancel(ir_filt,  accel_filt)
     red_clean = motion_cancel(red_filt, accel_filt)
