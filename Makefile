@@ -10,7 +10,7 @@ UF2   := $(BUILD)/zephyr/zephyr.uf2
 # Checks .venv/Scripts/python.exe (Windows), then .venv/bin/python (Unix), then system python.
 PYTHON := $(or $(wildcard .venv/Scripts/python.exe),$(wildcard .venv/bin/python),python)
 
-.PHONY: all help setup build rebuild flash term plot log process clean env
+.PHONY: all help setup build rebuild flash term plot log process explore clean env
 
 all: build
 
@@ -25,6 +25,7 @@ help:
 	@echo "  make plot    Live gyro plot + 3D orientation (requires: pip install pyqtgraph PyQt6 PyOpenGL imufusion pyserial)"
 	@echo "  make log     Record PPG+IMU to logs/YYYY-MM-DD_HH-MM-SS.csv"
 	@echo "  make process FILE=logs/....csv   Filter + compute BPM/SpO2/HRV/orientation"
+	@echo "  make explore FILE=logs/....csv   Interactive viewer (zoom/pan, all signals)"
 	@echo "  make clean   Remove build directory"
 	@echo "  make env     Show environment setup hints"
 	@echo ""
@@ -61,6 +62,13 @@ ifndef FILE
 	@echo "Usage: make process FILE=logs/<filename>.csv"
 else
 	@PYTHONPATH= $(PYTHON) analysis/pipeline.py $(FILE)
+endif
+
+explore:
+ifndef FILE
+	@echo "Usage: make explore FILE=logs/<filename>.csv"
+else
+	@PYTHONPATH= $(PYTHON) analysis/explore.py $(FILE)
 endif
 
 clean:
