@@ -776,10 +776,22 @@ Power: idle Xs/30s | peak ~Xmrad/s (thresh 100mrad/s)
 
 ### Power Management
 
-The firmware enters **nRF System Off** (~0.4 µA) after a configurable period of gyro inactivity.
+The firmware enters **nRF System Off** (~0.4 µA) after a configurable period of
+inactivity, where inactivity means **both** no gyro motion **and** no validated
+skin contact — wearing the device while sitting still (e.g. resting) does not
+trigger sleep, only setting it down and leaving it unworn does.
+
+**Skin-contact validation (`firmware/src/contact.c`):**
+A steady IR DC bump alone isn't enough to call it skin — a table or sleeve can
+produce one too. `contact_is_skin()` only returns true once a few consecutive
+peak-to-peak intervals in the IR AC signal land in a plausible cardiac range
+(40–180 BPM), confirming an actual pulse, not just a reflective surface.
+Known limitation: a surface vibrating periodically within that BPM range
+(e.g. on top of a washing machine) could still pass.
 
 **Sleep sequence:**
-1. No gyro motion above 0.1 rad/s for `CONFIG_MAID_IDLE_TIMEOUT_SEC` seconds
+1. No gyro motion above 0.1 rad/s AND no validated skin contact for
+   `CONFIG_MAID_IDLE_TIMEOUT_SEC` seconds
 2. MAX30102 set to SHDN mode (LEDs off, ~0.7 µA, I2C still alive)
 3. LSM6DS3TR-C reconfigured to accel-only 26 Hz wake-up detection on INT1 (P0.11)
 4. nRF enters System Off via `nrf_power_system_off()` — all GPIO go HiZ
@@ -792,6 +804,6 @@ The firmware enters **nRF System Off** (~0.4 µA) after a configurable period of
 **Configuring the timeout:**
 Edit `firmware/prj.conf`:
 ```
-CONFIG_MAID_IDLE_TIMEOUT_SEC=30   # change this value, then make build && make flash
+CONFIG_MAID_IDLE_TIMEOUT_SEC=10   # change this value, then make build && make flash
 ```
 Range 5–300 s. No source code changes needed.

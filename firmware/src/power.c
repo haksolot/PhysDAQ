@@ -7,6 +7,7 @@
 #include "power.h"
 #include "max30102.h"
 #include "ble.h"
+#include "contact.h"
 
 /* Motion threshold: 0.1 rad/s (≈ 5.7 °/s).
  * Compared as squared magnitude to avoid sqrtf.
@@ -24,7 +25,8 @@ static const struct device *i2c0 = DEVICE_DT_GET(DT_NODELABEL(i2c0));
 /* IMU INT1: P0.11 (source: xiao_ble_common.dtsi lsm6ds3tr-c irq-gpios) */
 #define IMU_INT1_ABS_PIN  NRF_GPIO_PIN_MAP(0, 11)
 
-static int64_t last_motion_ms;
+static int64_t last_active_ms;  /* last time motion OR validated skin contact
+                                  * was seen — drives the sleep decision */
 static int64_t last_status_ms;
 static int32_t peak_mrad;   /* max ||gyro||₁ in mrad/s since last print */
 
@@ -69,7 +71,7 @@ static void enter_sleep(void)
 
 void power_init(void)
 {
-	last_motion_ms = k_uptime_get();
+	last_active_ms = k_uptime_get();
 	last_status_ms = k_uptime_get();
 	peak_mrad      = 0;
 }
@@ -83,8 +85,14 @@ void power_update(const struct sensor_value gyro[3])
 
 	int64_t now = k_uptime_get();
 
-	if (gx*gx + gy*gy + gz*gz > MOTION_THRESH_SQ) {
-		last_motion_ms = now;
+	bool motion = (gx*gx + gy*gy + gz*gz) > MOTION_THRESH_SQ;
+	bool skin   = contact_is_skin();
+
+	/* Stay awake if either signal is active: moving, or worn-and-still
+	 * (validated pulse, no motion — e.g. resting). Only idle on both at
+	 * once does the sleep timer run out. */
+	if (motion || skin) {
+		last_active_ms = now;
 	}
 
 	/* L1-norm in mrad/s (integer, no sqrtf) — used only for the status log.
@@ -96,17 +104,17 @@ void power_update(const struct sensor_value gyro[3])
 	}
 
 	/* Periodic status line so you can watch the countdown in 'make term'.
-	 * Format:  Power: idle Xs/30s | peak ~Xmrad/s (thresh 100mrad/s) */
+	 * Format:  Power: idle Xs/10s | peau: oui | peak ~Xmrad/s (thresh 100mrad/s) */
 	if (now - last_status_ms >= STATUS_INTERVAL_MS) {
-		int32_t idle_s = (int32_t)((now - last_motion_ms) / 1000);
-		printk("Power: idle %ds/%ds | peak ~%dmrad/s (thresh %dmrad/s)\n",
-		       idle_s, CONFIG_MAID_IDLE_TIMEOUT_SEC,
+		int32_t idle_s = (int32_t)((now - last_active_ms) / 1000);
+		printk("Power: idle %ds/%ds | peau: %s | peak ~%dmrad/s (thresh %dmrad/s)\n",
+		       idle_s, CONFIG_MAID_IDLE_TIMEOUT_SEC, skin ? "oui" : "non",
 		       peak_mrad, MOTION_THRESH_MRAD);
 		last_status_ms = now;
 		peak_mrad      = 0;
 	}
 
-	if ((now - last_motion_ms) >= IDLE_TIMEOUT_MS) {
+	if ((now - last_active_ms) >= IDLE_TIMEOUT_MS) {
 		enter_sleep();
 	}
 }

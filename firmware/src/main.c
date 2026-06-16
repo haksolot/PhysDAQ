@@ -6,6 +6,7 @@
 #include "power.h"
 #include "ble.h"
 #include "battery.h"
+#include "contact.h"
 
 /* Format a sensor_value (val1 + val2/1e6) as "±integer.milli" using printk.
  * Mirrors the print_val helper in imu.c, kept local to avoid coupling. */
@@ -28,6 +29,7 @@ int main(void)
         printk("Battery ADC init failed — continuing without battery status\n");
     }
 
+    contact_init();
     power_init();
 
     if (ble_init() < 0) {
@@ -81,6 +83,7 @@ int main(void)
                 ble_send((const uint8_t *)line, n);
             }
 
+            contact_update(ppg.ir);
             power_update(imu.gyro);
 
             /* Internally rate-limited to once every 5 s — cheap to call
