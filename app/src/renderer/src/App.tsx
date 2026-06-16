@@ -2,6 +2,13 @@ import { useEffect, useState, useRef } from 'react'
 import { RealTimeChart } from './components/RealTimeChart'
 import { BoardVisualizer } from './components/BoardVisualizer'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 import { 
   Heart, 
   Bluetooth, 
@@ -56,6 +63,10 @@ export default function App() {
   const [bleDevices, setBleDevices] = useState<{ address: string; name: string }[]>([])
   const [isScanning, setIsScanning] = useState<boolean>(false)
   const [isFetchingPorts, setIsFetchingPorts] = useState<boolean>(false)
+
+  // Disconnect alert popup states
+  const [showDisconnectDialog, setShowDisconnectDialog] = useState<boolean>(false)
+  const wasConnected = useRef<boolean>(false)
 
   // High-frequency values throttled for UI text display
   const [textValues, setTextValues] = useState({
@@ -160,9 +171,11 @@ export default function App() {
       if (log.includes('connected to Serial')) {
         const portMatch = log.match(/Serial\s+(\S+)/)
         setStatus({ status: 'connected', port: portMatch ? portMatch[1] : 'USB' })
+        wasConnected.current = true
       } else if (log.includes('connected to BLE')) {
         const addrMatch = log.match(/BLE\s+(\S+)/)
         setStatus({ status: 'connected', ble_addr: addrMatch ? addrMatch[1] : 'BLE' })
+        wasConnected.current = true
       }
     })
 
@@ -174,6 +187,11 @@ export default function App() {
         setContact(false)
         setLatestQuat([1, 0, 0, 0])
         dataRef.current = []
+
+        if (wasConnected.current) {
+          setShowDisconnectDialog(true)
+          wasConnected.current = false
+        }
       }
     })
 
@@ -185,6 +203,7 @@ export default function App() {
   }, [])
 
   const handleConnect = (): void => {
+    wasConnected.current = false
     window.api.restartSidecar({
       mode,
       portOrAddr: target.trim() || undefined
@@ -203,7 +222,7 @@ export default function App() {
         <div className="flex items-center gap-3">
           <Activity className="w-7 h-7 text-[#f38ba8] animate-pulse" />
           <div>
-            <h1 className="text-lg font-bold tracking-tight bg-gradient-to-r from-[#f38ba8] via-[#cba6f7] to-[#89b4fa] bg-clip-text text-fill-color-transparent">
+            <h1 className="text-lg font-bold tracking-tight text-[#cdd6f4]">
               MAID Wearable Interface
             </h1>
             <p className="text-[10px] font-mono text-[#a6adc8]">ACQUISITION & ANALYSIS SYSTEM</p>
@@ -353,7 +372,7 @@ export default function App() {
             <div className="flex items-end">
               <Button
                 onClick={handleConnect}
-                className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-[#cba6f7] to-[#89b4fa] hover:opacity-90 transition-all text-[#11111b] font-bold text-xs py-2.5 rounded-lg"
+                className="w-full flex items-center justify-center gap-2 font-bold"
               >
                 <RefreshCw className="w-4 h-4" />
                 Initialize Link
@@ -489,6 +508,31 @@ export default function App() {
         </div>
 
       </main>
+
+      {/* Disconnect Alert Dialog (Native shadcn components only, no custom colors) */}
+      <Dialog open={showDisconnectDialog} onOpenChange={setShowDisconnectDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <WifiOff className="w-5 h-5 text-destructive" />
+              Sensor Connection Lost
+            </DialogTitle>
+            <DialogDescription>
+              The connection to the MAID sensor module has been lost. Please verify that:
+              <ul className="list-disc pl-5 pt-2 space-y-1 text-xs">
+                <li>The sensor module is powered on and within range.</li>
+                <li>The USB cable is securely plugged in (for Serial connection).</li>
+                <li>The BLE Bluetooth is enabled on your host PC.</li>
+              </ul>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end pt-4">
+            <Button onClick={() => setShowDisconnectDialog(false)}>
+              Acknowledge
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
