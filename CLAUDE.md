@@ -777,20 +777,22 @@ Power: idle Xs/30s | peak ~Xmrad/s (thresh 100mrad/s)
 ### Power Management
 
 The firmware enters **nRF System Off** (~0.4 µA) after a configurable period of
-inactivity, where inactivity means **both** no gyro motion **and** no validated
-skin contact — wearing the device while sitting still (e.g. resting) does not
+inactivity, where inactivity means **both** no gyro motion **and** no IR
+contact — wearing the device while sitting still (e.g. resting) does not
 trigger sleep, only setting it down and leaving it unworn does.
 
-**Skin-contact validation (`firmware/src/contact.c`):**
-A steady IR DC bump alone isn't enough to call it skin — a table or sleeve can
-produce one too. `contact_is_skin()` only returns true once a few consecutive
-peak-to-peak intervals in the IR AC signal land in a plausible cardiac range
-(40–180 BPM), confirming an actual pulse, not just a reflective surface.
-Known limitation: a surface vibrating periodically within that BPM range
-(e.g. on top of a washing machine) could still pass.
+**Contact detection (`firmware/src/contact.c`):**
+`contact_is_skin()` is a DC-level check on the IR channel — same threshold as
+`analysis/pipeline.py`'s `CONTACT_IR_MIN` (open air ~100-300 counts vs ~29000+
+with something on the sensor). An earlier version also required validating an
+actual heartbeat (consecutive peak intervals in a plausible cardiac range) to
+reject inert reflective surfaces, but the embedded peak detector never
+reliably found one on real hardware — reverted to the simpler DC-only check
+that's already proven on the PC side. Known limitation: a non-skin reflective
+surface at the right distance can also register as "contact".
 
 **Sleep sequence:**
-1. No gyro motion above 0.1 rad/s AND no validated skin contact for
+1. No gyro motion above 0.1 rad/s AND no IR contact for
    `CONFIG_MAID_IDLE_TIMEOUT_SEC` seconds
 2. MAX30102 set to SHDN mode (LEDs off, ~0.7 µA, I2C still alive)
 3. LSM6DS3TR-C reconfigured to accel-only 26 Hz wake-up detection on INT1 (P0.11)

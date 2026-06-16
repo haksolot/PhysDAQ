@@ -4,16 +4,22 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Reset internal filter/peak-detector state. Call once at startup. */
+/* Reset internal filter state. Call once at startup. */
 void contact_init(void);
 
 /* Feed one new IR sample — call once per PPG sample (same cadence as
- * max30102_fetch()). Updates DC/AC tracking and pulse validation. */
+ * max30102_fetch()). Updates the DC-level estimate. */
 void contact_update(uint32_t ir_sample);
 
-/* True only once a plausible heartbeat has been confirmed recently — a
- * steady IR DC bump alone (e.g. resting on a table) is not enough, see
- * contact.c for the validation method. */
+/* True when the IR DC level indicates something is on the sensor — see
+ * CONTACT_DC_MIN in contact.c. DC-only: no heartbeat validation, so an
+ * inert reflective surface at the right distance could also read true. */
 bool contact_is_skin(void);
+
+/* Diagnostic snapshot for the periodic status line. */
+struct contact_debug {
+	float dc;  /* raw IR DC estimate (counts) */
+};
+void contact_get_debug(struct contact_debug *out);
 
 #endif /* CONTACT_H */
