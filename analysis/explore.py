@@ -95,14 +95,13 @@ def new_plot(glw, row, title, y_label, ref=None, last=False):
     return p
 
 
-def shade_motion(plot, t, motion_arr):
-    """Add red transparent regions where motion == 1."""
-    m       = motion_arr.astype(bool)
+def shade_regions(plot, t, mask, brush):
+    """Add transparent regions where mask == 1."""
+    m       = mask.astype(bool)
     padded  = np.concatenate([[False], m, [False]])
     edges   = np.diff(padded.astype(int))
     starts  = np.where(edges ==  1)[0]
     ends    = np.where(edges == -1)[0]
-    brush   = pg.mkBrush(255, 80, 80, 45)
     for s, e in zip(starts, ends):
         region = pg.LinearRegionItem(
             [float(t[min(s, len(t)-1)]), float(t[min(e, len(t)-1)])],
@@ -126,6 +125,7 @@ def main():
     N            = len(t)
     duration     = float(t[-1] - t[0])
     has_enriched = "red_filt" in df.columns
+    has_contact  = "contact" in df.columns
     has_beats    = beats_df is not None and not beats_df.empty
     has_spectral = spectral_df is not None and not spectral_df.empty
 
@@ -135,6 +135,8 @@ def main():
     print(f"Loaded : {label}  ({N} samples, {duration:.1f} s)")
     if has_enriched:
         print("  Colonnes enrichies détectées (PPG filtré, orientation, motion)")
+    if has_contact and not df["contact"].any():
+        print("  ATTENTION : aucun contact peau détecté sur tout l'enregistrement")
     if has_beats:
         print(f"  Fichier beats : {len(beats_df)} battements")
     if has_spectral:
@@ -190,6 +192,9 @@ def main():
                    name="Red")
             p.plot(t, df["ir"].to_numpy(),  pen=pg.mkPen(COLORS["ir"],  width=1),
                    name="IR")
+            if has_contact:
+                shade_regions(p, t, 1 - df["contact"].to_numpy(),
+                              pg.mkBrush(140, 140, 140, 60))
 
         # ── PPG Filtré + marqueurs battements ──────────────────────────────
         elif panel == "ppg_filt":
@@ -263,7 +268,7 @@ def main():
             p.addLegend(offset=(10, 10))
             p.plot(t, df["accel_mag_g"].to_numpy(),
                    pen=pg.mkPen(COLORS["mag"], width=1.5), name="|accel dyn| (g)")
-            shade_motion(p, t, df["motion"].to_numpy())
+            shade_regions(p, t, df["motion"].to_numpy(), pg.mkBrush(255, 80, 80, 45))
 
         row += 1
 

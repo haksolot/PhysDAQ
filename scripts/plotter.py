@@ -78,6 +78,14 @@ BPM_SNR_MIN  = 3.0       # peak must exceed N× the band's median magnitude
 BPM_MAX_STEP = 4.0        # BPM — clamp per-tick change for a stable display
 BPM_LOST_TICKS = 20        # ~1 s of failed estimates before showing "—" again
 
+# Skin-contact gate: same empirical threshold as analysis/pipeline.py
+# (CONTACT_IR_MIN) — open air reads ~100-300 raw IR counts on this
+# hardware vs ~29000+ with a finger on the sensor. Without this, ambient
+# light / electrical noise can still produce a plausible-looking (but
+# meaningless) BPM with nothing on the sensor.
+CONTACT_IR_MIN  = 5000
+CONTACT_CHECK_N = 30      # ~0.3 s of recent raw samples averaged for the check
+
 GYRO_STILL_THRESHOLD   = 0.05  # rad/s — below this = stationary
 ZUPT_MIN_STILL_SAMPLES = 20    # consecutive still samples before ZUPT
 
@@ -569,12 +577,20 @@ def main():
         c_ir_filt.setData(xs, ir_filt)
         c_red_filt.setData(xs, red_filt)
 
-        # BPM from a dedicated 8 s narrowband window — see BPM_WINDOW_S.
-        # Decoupled from ir_filt (0.5-8 Hz, used only for waveform display).
-        raw_bpm = rt_bpm_raw(np.array(ir_bpm_buf))
-        bpm     = rt_bpm_smoothed(raw_bpm, bpm_state)
-        filt_plot.setTitle(f"PPG filtré (0.5–8 Hz) — BPM: {bpm:.0f}" if bpm
-                           else "PPG filtré (0.5–8 Hz) — BPM: —")
+        # Skin-contact gate: don't even attempt a BPM estimate without it —
+        # see CONTACT_IR_MIN.
+        has_contact = np.mean(ir_arr[-CONTACT_CHECK_N:]) > CONTACT_IR_MIN
+        if has_contact:
+            # BPM from a dedicated 8 s narrowband window — see BPM_WINDOW_S.
+            # Decoupled from ir_filt (0.5-8 Hz, used only for waveform display).
+            raw_bpm = rt_bpm_raw(np.array(ir_bpm_buf))
+            bpm     = rt_bpm_smoothed(raw_bpm, bpm_state)
+            filt_plot.setTitle(f"PPG filtré (0.5–8 Hz) — BPM: {bpm:.0f}" if bpm
+                               else "PPG filtré (0.5–8 Hz) — BPM: —")
+        else:
+            bpm_state["value"] = None
+            bpm_state["lost"]  = 0
+            filt_plot.setTitle("PPG filtré (0.5–8 Hz) — pas de contact peau")
 
         with ahrs_lock:
             q = current_quat.copy()
