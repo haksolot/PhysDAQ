@@ -5,6 +5,7 @@
 #include "max30102.h"
 #include "power.h"
 #include "ble.h"
+#include "battery.h"
 
 /* Format a sensor_value (val1 + val2/1e6) as "±integer.milli" using printk.
  * Mirrors the print_val helper in imu.c, kept local to avoid coupling. */
@@ -23,6 +24,10 @@ int main(void)
         return 0;
     }
 
+    if (battery_init() < 0) {
+        printk("Battery ADC init failed — continuing without battery status\n");
+    }
+
     power_init();
 
     if (ble_init() < 0) {
@@ -33,6 +38,7 @@ int main(void)
     printk("PPG: SpO2 mode, 100 Hz, 18-bit ADC\n");
     printk("IMU: accel [m/s^2], gyro [rad/s]\n");
     printk("BLE: NUS advertising as MAID\n");
+    printk("Battery: VBAT via P0.31/AIN7, sampled every 5 s\n");
     printk("Power: sleep after %d s idle\n\n",
            CONFIG_MAID_IDLE_TIMEOUT_SEC);
 
@@ -76,6 +82,18 @@ int main(void)
             }
 
             power_update(imu.gyro);
+
+            /* Internally rate-limited to once every 5 s — cheap to call
+             * every sample. */
+            uint8_t batt_pct;
+            int32_t batt_mv;
+            if (battery_poll(&batt_pct, &batt_mv) == 0) {
+                char batt_line[48];
+                int batt_n = snprintk(batt_line, sizeof(batt_line),
+                    "Battery: %u%% (%d mV)\n", batt_pct, batt_mv);
+                printk("%s", batt_line);
+                ble_send((const uint8_t *)batt_line, batt_n);
+            }
         }
     }
 
