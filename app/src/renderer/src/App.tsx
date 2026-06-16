@@ -160,14 +160,20 @@ export default function App() {
     }
   }
 
-  // Clear discovery state and error on configure dialog open/close
+  // Clear discovery state, error, and automatically start scan on configure dialog open/mode change
   useEffect(() => {
     if (configureOpen) {
       setScanError(null)
       setSerialPorts([])
       setBleDevices([])
+
+      if (mode === 'ble') {
+        startBleScan()
+      } else {
+        fetchPorts()
+      }
     }
-  }, [configureOpen])
+  }, [configureOpen, mode])
 
   // Load recordings list
   const loadRecordings = async () => {
@@ -1373,7 +1379,7 @@ export default function App() {
                 <SelectTrigger className="w-full font-mono bg-background/50 h-9">
                   <SelectValue placeholder={mode === 'serial' ? '-- Auto-detect --' : '-- Auto-detect / Scan --'} />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper" className="max-h-60 overflow-y-auto">
                   <SelectItem value="auto-detect">-- Auto-detect --</SelectItem>
                   {mode === 'serial' ? (
                     Array.isArray(serialPorts) && serialPorts.map((p) => (
