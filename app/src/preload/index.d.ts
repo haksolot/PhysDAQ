@@ -5,6 +5,8 @@ export interface SidecarAPI {
   onSidecarLog: (callback: (log: string) => void) => () => void
   onSidecarStatus: (callback: (status: any) => void) => () => void
   restartSidecar: (config: { mode: 'serial' | 'ble'; portOrAddr?: string }) => void
+  getSerialPorts: () => Promise<any[]>
+  scanBle: () => Promise<any[]>
 }
 
 declare global {

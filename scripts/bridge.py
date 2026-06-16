@@ -68,6 +68,51 @@ if not USE_BLE:
             PORT = arg
             break
 
+# Handle utility commands
+if "--list-ports" in sys.argv:
+    import serial.tools.list_ports
+    ports = list(serial.tools.list_ports.comports())
+    out = []
+    for p in ports:
+        out.append({
+            "port": p.device,
+            "desc": p.description,
+            "hwid": p.hwid
+        })
+    print(json.dumps(out))
+    sys.exit(0)
+
+if "--scan" in sys.argv:
+    import asyncio
+    from bleak import BleakScanner
+    NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+    
+    async def run_scan():
+        try:
+            devices = await BleakScanner.discover(timeout=3.0)
+            out = []
+            for d in devices:
+                uuids = [u.lower() for u in (d.metadata.get("uuids") or [])]
+                is_candidate = (
+                    NUS_SERVICE_UUID in uuids or 
+                    any(x in (d.name or "").upper() for x in ["MAID", "XIAO", "SENSE", "SEEED"])
+                )
+                if is_candidate:
+                    out.append({
+                        "address": d.address,
+                        "name": d.name or "Unknown Device"
+                    })
+            print(json.dumps(out))
+        except Exception as err:
+            print(json.dumps({"error": str(err)}))
+        sys.exit(0)
+        
+    try:
+        asyncio.run(run_scan())
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+        sys.exit(1)
+
 PATTERN = re.compile(
     r'PPG\s+red=(\d+)\s+ir=(\d+)\s+\|\s+IMU\s+'
     r'ax=(-?[\d.]+)\s+ay=(-?[\d.]+)\s+az=(-?[\d.]+)\s+'
@@ -247,23 +292,38 @@ def find_xiao_port():
     return candidates[0].device if candidates else ports[0].device
 
 def serial_reader(port):
-    try:
-        ser = serial.Serial(port, BAUD, timeout=1)
-    except serial.SerialException as e:
-        sys.stderr.write(f"Cannot open {port}: {e}\n")
-        print(json.dumps({"error": f"Cannot open {port}: {e}"}), flush=True)
-        sys.exit(1)
-
-    sys.stderr.write(f"Bridge connected to Serial {port}\n")
-    print(json.dumps({"status": "connected", "port": port}), flush=True)
-    
+    ser = None
     while True:
+        active_port = port
+        if not active_port:
+            active_port = find_xiao_port()
+            if not active_port:
+                sys.stderr.write("Serial: Xiao port not found, retrying in 2 s...\n")
+                print(json.dumps({"status": "disconnected"}), flush=True)
+                time.sleep(2.0)
+                continue
+
         try:
-            line = ser.readline().decode("utf-8", errors="replace").strip()
-            process_sample(line)
+            sys.stderr.write(f"Serial: Opening {active_port}...\n")
+            ser = serial.Serial(active_port, BAUD, timeout=1)
+            sys.stderr.write(f"Bridge connected to Serial {active_port}\n")
+            print(json.dumps({"status": "connected", "port": active_port}), flush=True)
+            
+            while True:
+                line = ser.readline().decode("utf-8", errors="replace").strip()
+                if line:
+                    process_sample(line)
         except Exception as e:
-            sys.stderr.write(f"Read error: {e}\n")
-            time.sleep(0.5)
+            sys.stderr.write(f"Serial error: {e}\n")
+            if ser:
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+                ser = None
+            sys.stderr.write("Serial: disconnected — reconnecting in 2 s...\n")
+            print(json.dumps({"status": "disconnected"}), flush=True)
+            time.sleep(2.0)
 
 # BLE transport
 def ble_reader(addr_hint):
@@ -279,39 +339,45 @@ def ble_reader(addr_hint):
 
     async def _run():
         nonlocal addr_hint
-        if not addr_hint:
-            sys.stderr.write("BLE: scanning for MAID wearable...\n")
-            found = await BleakScanner.discover(timeout=5.0, service_uuids=[NUS_SERVICE_UUID])
-            if not found:
-                # Unfiltered fallback
-                all_devs = await BleakScanner.discover(timeout=3.0)
-                found = [d for d in all_devs if NUS_SERVICE_UUID in [u.lower() for u in (d.metadata.get("uuids") or [])]]
-            if not found:
-                print(json.dumps({"error": "No BLE sensor found. Make sure it's turned on."}), flush=True)
-                sys.exit(1)
-            addr_hint = found[0].address
-
-        sys.stderr.write(f"BLE: connecting to {addr_hint}...\n")
         
-        buf = ""
-        def on_notify(char, data):
-            nonlocal buf
-            buf += data.decode("utf-8", errors="replace")
-            while "\n" in buf:
-                line, buf = buf.split("\n", 1)
-                process_sample(line)
-
         while True:
+            active_addr = addr_hint
+            if not active_addr:
+                sys.stderr.write("BLE: scanning for MAID wearable...\n")
+                print(json.dumps({"status": "disconnected"}), flush=True)
+                found = await BleakScanner.discover(timeout=4.0, service_uuids=[NUS_SERVICE_UUID])
+                if not found:
+                    # Unfiltered fallback
+                    all_devs = await BleakScanner.discover(timeout=3.0)
+                    found = [d for d in all_devs if NUS_SERVICE_UUID in [u.lower() for u in (d.metadata.get("uuids") or [])]]
+                if not found:
+                    sys.stderr.write("BLE: no sensor found, retrying in 3 s...\n")
+                    await asyncio.sleep(3.0)
+                    continue
+                active_addr = found[0].address
+
+            sys.stderr.write(f"BLE: connecting to {active_addr}...\n")
+            
+            buf = ""
+            def on_notify(char, data):
+                nonlocal buf
+                buf += data.decode("utf-8", errors="replace")
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    process_sample(line)
+
             try:
-                async with BleakClient(addr_hint, timeout=10.0) as client:
-                    sys.stderr.write(f"Bridge connected to BLE {addr_hint}\n")
-                    print(json.dumps({"status": "connected", "ble_addr": addr_hint}), flush=True)
+                async with BleakClient(active_addr, timeout=10.0) as client:
+                    sys.stderr.write(f"Bridge connected to BLE {active_addr}\n")
+                    print(json.dumps({"status": "connected", "ble_addr": active_addr}), flush=True)
                     await client.start_notify(NUS_TX_UUID, on_notify)
                     while client.is_connected:
                         await asyncio.sleep(0.5)
             except Exception as e:
                 sys.stderr.write(f"BLE Error: {e}\n")
-            sys.stderr.write("BLE: reconnecting in 3 s...\n")
+            
+            sys.stderr.write("BLE: disconnected — retrying in 3 s...\n")
+            print(json.dumps({"status": "disconnected"}), flush=True)
             await asyncio.sleep(3.0)
 
     asyncio.run(_run())
@@ -329,11 +395,7 @@ def main():
     if USE_BLE:
         ble_reader(BLE_ADDR)
     else:
-        port = PORT if PORT else find_xiao_port()
-        if not port:
-            print(json.dumps({"error": "No serial port found. Is the device connected?"}), flush=True)
-            sys.exit(1)
-        serial_reader(port)
+        serial_reader(PORT)
 
 if __name__ == "__main__":
     main()

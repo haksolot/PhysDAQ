@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, exec, ChildProcess } from 'child_process'
 import { join } from 'path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { is } from '@electron-toolkit/utils'
@@ -149,3 +149,57 @@ export function stopSidecar(): void {
 app.on('will-quit', () => {
   stopSidecar()
 })
+
+export function getSerialPorts(): Promise<any[]> {
+  return new Promise((resolve) => {
+    let command = 'python'
+    let args = [join(__dirname, '../../../scripts/bridge.py'), '--list-ports']
+
+    if (!is.dev) {
+      command = join(process.resourcesPath, 'bridge.exe')
+      args = ['--list-ports']
+    }
+
+    exec(`"${command}" ${args.join(' ')}`, (err, stdout, stderr) => {
+      if (err) {
+        console.error('[Sidecar] Failed to get serial ports:', err, stderr)
+        resolve([])
+        return
+      }
+      try {
+        const json = JSON.parse(stdout.trim())
+        resolve(json)
+      } catch (e) {
+        console.error('[Sidecar] Failed to parse serial ports output:', stdout, e)
+        resolve([])
+      }
+    })
+  })
+}
+
+export function scanBle(): Promise<any[]> {
+  return new Promise((resolve) => {
+    let command = 'python'
+    let args = [join(__dirname, '../../../scripts/bridge.py'), '--scan']
+
+    if (!is.dev) {
+      command = join(process.resourcesPath, 'bridge.exe')
+      args = ['--scan']
+    }
+
+    exec(`"${command}" ${args.join(' ')}`, (err, stdout, stderr) => {
+      if (err) {
+        console.error('[Sidecar] Failed to scan BLE devices:', err, stderr)
+        resolve([])
+        return
+      }
+      try {
+        const json = JSON.parse(stdout.trim())
+        resolve(json)
+      } catch (e) {
+        console.error('[Sidecar] Failed to parse BLE scan output:', stdout, e)
+        resolve([])
+      }
+    })
+  })
+}

@@ -51,6 +51,12 @@ export default function App() {
   const [contact, setContact] = useState<boolean>(false)
   const [latestQuat, setLatestQuat] = useState<[number, number, number, number]>([1, 0, 0, 0])
   
+  // Device discovery lists
+  const [serialPorts, setSerialPorts] = useState<{ port: string; desc: string; hwid: string }[]>([])
+  const [bleDevices, setBleDevices] = useState<{ address: string; name: string }[]>([])
+  const [isScanning, setIsScanning] = useState<boolean>(false)
+  const [isFetchingPorts, setIsFetchingPorts] = useState<boolean>(false)
+
   // High-frequency values throttled for UI text display
   const [textValues, setTextValues] = useState({
     ax: 0, ay: 0, az: 0,
@@ -63,6 +69,56 @@ export default function App() {
   // Raw data ref for RealTimeCharts
   const dataRef = useRef<any[]>([])
   const sampleCounter = useRef<number>(0)
+
+  const fetchPorts = async () => {
+    setIsFetchingPorts(true)
+    setLogs((prev) => ["[UI] Fetching available serial ports...", ...prev])
+    try {
+      const ports = await window.api.getSerialPorts()
+      setSerialPorts(ports)
+      if (ports.length > 0) {
+        // Auto-select candidate if it has Xiao keywords
+        const candidate = ports.find((p) =>
+          p.desc.toUpperCase().includes('XIAO') ||
+          p.desc.toUpperCase().includes('SEEED') ||
+          p.desc.toUpperCase().includes('NRF52840') ||
+          p.desc.toUpperCase().includes('J-LINK')
+        )
+        setTarget(candidate ? candidate.port : ports[0].port)
+        setLogs((prev) => [`[UI] Found ${ports.length} port(s). Auto-selected: ${candidate ? candidate.port : ports[0].port}`, ...prev])
+      } else {
+        setLogs((prev) => ["[UI] No serial ports found.", ...prev])
+      }
+    } catch (err) {
+      setLogs((prev) => [`[UI] Error listing ports: ${err}`, ...prev])
+    } finally {
+      setIsFetchingPorts(false)
+    }
+  }
+
+  const startBleScan = async () => {
+    setIsScanning(true)
+    setLogs((prev) => ["[UI] Scanning for BLE wearables (MAID/XIAO) for 3s...", ...prev])
+    try {
+      const devices = await window.api.scanBle()
+      setBleDevices(devices)
+      if (devices.length > 0) {
+        setTarget(devices[0].address)
+        setLogs((prev) => [`[UI] Discovered ${devices.length} BLE devices. Auto-selected: ${devices[0].name} (${devices[0].address})`, ...prev])
+      } else {
+        setLogs((prev) => ["[UI] No compatible BLE devices found during scan.", ...prev])
+      }
+    } catch (err) {
+      setLogs((prev) => [`[UI] BLE scan failed: ${err}`, ...prev])
+    } finally {
+      setIsScanning(false)
+    }
+  }
+
+  // Fetch ports on startup
+  useEffect(() => {
+    fetchPorts()
+  }, [])
 
   // Listen to Sidecar data
   useEffect(() => {
@@ -226,18 +282,71 @@ export default function App() {
               </div>
             </div>
 
-            {/* Address / Port input */}
+            {/* Target Select & Input */}
             <div className="flex flex-col gap-1.5 md:col-span-2">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-[#a6adc8]">
-                {mode === 'serial' ? 'Serial Port (optional)' : 'BLE MAC Address (optional)'}
-              </label>
-              <input
-                type="text"
-                value={target}
-                onChange={(e) => setTarget(e.target.value)}
-                placeholder={mode === 'serial' ? 'e.g. COM3 or /dev/ttyACM0 (auto-detects if empty)' : 'e.g. DA:10:C0:EF:FD:F9 (scans if empty)'}
-                className="bg-[#11111b] text-xs px-3 py-2.5 rounded-lg border border-[#313244] focus:outline-none focus:border-[#cba6f7] transition-all font-mono placeholder:text-[#585b70]"
-              />
+              <div className="flex justify-between items-center">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-[#a6adc8]">
+                  {mode === 'serial' ? 'Select Port' : 'Select Device'}
+                </label>
+                {mode === 'serial' ? (
+                  <button 
+                    onClick={fetchPorts} 
+                    disabled={isFetchingPorts}
+                    className="text-[10px] text-[#cba6f7] hover:underline flex items-center gap-1 font-semibold focus:outline-none"
+                  >
+                    <RefreshCw className={`w-2.5 h-2.5 ${isFetchingPorts ? 'animate-spin' : ''}`} />
+                    Refresh Ports
+                  </button>
+                ) : (
+                  <button 
+                    onClick={startBleScan} 
+                    disabled={isScanning}
+                    className="text-[10px] text-[#cba6f7] hover:underline flex items-center gap-1 font-semibold focus:outline-none"
+                  >
+                    <RefreshCw className={`w-2.5 h-2.5 ${isScanning ? 'animate-spin' : ''}`} />
+                    {isScanning ? 'Scanning...' : 'Scan Devices'}
+                  </button>
+                )}
+              </div>
+
+              <div className="flex gap-2">
+                {mode === 'serial' ? (
+                  <select
+                    value={target}
+                    onChange={(e) => setTarget(e.target.value)}
+                    className="bg-[#11111b] text-xs px-3 py-2.5 rounded-lg border border-[#313244] focus:outline-none focus:border-[#cba6f7] transition-all font-mono flex-1 text-[#cdd6f4]"
+                  >
+                    <option value="">-- Auto-detect --</option>
+                    {serialPorts.map((p) => (
+                      <option key={p.port} value={p.port}>
+                        {p.port} {p.desc ? ` - ${p.desc}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <select
+                    value={target}
+                    onChange={(e) => setTarget(e.target.value)}
+                    className="bg-[#11111b] text-xs px-3 py-2.5 rounded-lg border border-[#313244] focus:outline-none focus:border-[#cba6f7] transition-all font-mono flex-1 text-[#cdd6f4]"
+                  >
+                    <option value="">-- Auto-detect / Scan --</option>
+                    {bleDevices.map((d) => (
+                      <option key={d.address} value={d.address}>
+                        {d.name} ({d.address})
+                      </option>
+                    ))}
+                  </select>
+                )}
+                
+                {/* Manual override input (optional) */}
+                <input
+                  type="text"
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  placeholder="Manual Override"
+                  className="bg-[#11111b] text-xs px-3 py-2.5 rounded-lg border border-[#313244] focus:outline-none focus:border-[#cba6f7] transition-all font-mono placeholder:text-[#585b70] w-36 text-center"
+                />
+              </div>
             </div>
 
             {/* Connect button */}

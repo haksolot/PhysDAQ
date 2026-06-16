@@ -26,7 +26,9 @@ const api = {
   },
   restartSidecar: (config: { mode: 'serial' | 'ble'; portOrAddr?: string }) => {
     ipcRenderer.send('restart-sidecar', config)
-  }
+  },
+  getSerialPorts: () => ipcRenderer.invoke('get-serial-ports'),
+  scanBle: () => ipcRenderer.invoke('scan-ble')
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
