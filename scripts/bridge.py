@@ -92,16 +92,10 @@ if "--scan" in sys.argv:
             devices = await BleakScanner.discover(timeout=3.0)
             out = []
             for d in devices:
-                uuids = [u.lower() for u in (d.metadata.get("uuids") or [])]
-                is_candidate = (
-                    NUS_SERVICE_UUID in uuids or 
-                    any(x in (d.name or "").upper() for x in ["MAID", "XIAO", "SENSE", "SEEED"])
-                )
-                if is_candidate:
-                    out.append({
-                        "address": d.address,
-                        "name": d.name or "Unknown Device"
-                    })
+                out.append({
+                    "address": d.address,
+                    "name": d.name or "Unknown Device"
+                })
             print(json.dumps(out))
         except Exception as err:
             print(json.dumps({"error": str(err)}))
@@ -259,11 +253,21 @@ def process_sample(line: str) -> None:
         bpm_state["value"] = None
         bpm_state["lost"] = 0
 
+    # Filtered PPG value (BPM AC Waveform)
+    ppg_filt = 0.0
+    if len(ir_bpm_buf) >= 15 and _SCIPY_OK:
+        try:
+            filt_arr = sosfiltfilt(_BPM_BP_SOS, list(ir_bpm_buf))
+            ppg_filt = float(filt_arr[-1])
+        except Exception:
+            pass
+
     # Output JSON sample to stdout
     output = {
         "type": "sample",
         "red": red,
         "ir": ir,
+        "ppg_filt": ppg_filt,
         "ax": ax,
         "ay": ay,
         "az": az,

@@ -56,12 +56,14 @@ interface SensorNode {
 }
 
 const SENSOR_POSITIONS = [
+  { id: 'head', label: 'Ear / Head', x: 50, y: 14 },
   { id: 'chest', label: 'Chest (Torso)', x: 50, y: 34 },
   { id: 'wrist_left', label: 'Left Wrist', x: 24, y: 44 },
   { id: 'wrist_right', label: 'Right Wrist', x: 76, y: 44 },
+  { id: 'finger_left', label: 'Left Finger', x: 16, y: 48 },
+  { id: 'finger_right', label: 'Right Finger', x: 84, y: 48 },
   { id: 'ankle_left', label: 'Left Ankle', x: 42, y: 84 },
-  { id: 'ankle_right', label: 'Right Ankle', x: 58, y: 84 },
-  { id: 'head', label: 'Ear / Head', x: 50, y: 14 }
+  { id: 'ankle_right', label: 'Right Ankle', x: 58, y: 84 }
 ] as const
 
 export default function App() {
@@ -98,18 +100,24 @@ export default function App() {
 
   // Nodes state
   const [sensors, setSensors] = useState<Record<string, SensorNode>>({
+    head: { id: 'head', position: 'head', label: 'Ear / Head', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
     chest: { id: 'chest', position: 'chest', label: 'Chest (Torso)', mode: 'serial', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
     wrist_left: { id: 'wrist_left', position: 'wrist_left', label: 'Left Wrist', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
     wrist_right: { id: 'wrist_right', position: 'wrist_right', label: 'Right Wrist', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
+    finger_left: { id: 'finger_left', position: 'finger_left', label: 'Left Finger', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
+    finger_right: { id: 'finger_right', position: 'finger_right', label: 'Right Finger', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
     ankle_left: { id: 'ankle_left', position: 'ankle_left', label: 'Left Ankle', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
-    ankle_right: { id: 'ankle_right', position: 'ankle_right', label: 'Right Ankle', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
-    head: { id: 'head', position: 'head', label: 'Ear / Head', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] }
+    ankle_right: { id: 'ankle_right', position: 'ankle_right', label: 'Right Ankle', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] }
   })
 
   // Refs for real-time/static charts
   const dataRef = useRef<any[]>([])
+  const staticPpgFiltRef = useRef<any[]>([])
   const staticPpgRef = useRef<any[]>([])
   const staticImuRef = useRef<any[]>([])
+
+  // Session Zoom Range state
+  const [sessionRange, setSessionRange] = useState<[number, number]>([0, 100])
 
   const fetchPorts = async () => {
     setIsFetchingPorts(true)
@@ -334,6 +342,7 @@ export default function App() {
   const handleSelectFile = async (file: any) => {
     setSelectedFile(file)
     setRecordingData([])
+    setSessionRange([0, 100])
     if (selectedSession) {
       const res = await window.api.getRecordingData(selectedSession.path, file.filename)
       if (res.success && res.data) {
@@ -353,8 +362,18 @@ export default function App() {
     return result
   }
 
-  staticPpgRef.current = downsample(recordingData)
-  staticImuRef.current = downsample(recordingData)
+  // Get active subset of recording data based on interactive range selection
+  const getSelectedDataSubset = () => {
+    if (recordingData.length === 0) return []
+    const startIdx = Math.floor((sessionRange[0] / 100) * (recordingData.length - 1))
+    const endIdx = Math.floor((sessionRange[1] / 100) * (recordingData.length - 1))
+    return recordingData.slice(startIdx, Math.max(startIdx + 2, endIdx + 1))
+  }
+
+  const currentSubset = getSelectedDataSubset()
+  staticPpgFiltRef.current = downsample(currentSubset)
+  staticPpgRef.current = downsample(currentSubset)
+  staticImuRef.current = downsample(currentSubset)
 
   const activeSensor = selectedSensorId ? sensors[selectedSensorId] : null
   const heartAnimDuration = activeSensor?.bpm ? `${60 / activeSensor.bpm}s` : '1.2s'
@@ -400,10 +419,10 @@ export default function App() {
 
       {/* ── MAIN DASHBOARD VIEW ── */}
       {currentPage === 'global' && (
-        <main className="flex-1 flex overflow-hidden p-4 gap-4">
+        <main className="flex-1 flex flex-col md:flex-row overflow-y-auto md:overflow-hidden p-4 gap-4">
           
           {/* LEFT PANEL: Nodes Configuration & Live Status */}
-          <div className="w-[380px] flex flex-col gap-4 overflow-y-auto pr-1">
+          <div className="w-full md:w-[380px] flex flex-col gap-4 md:overflow-y-auto pr-1">
             
             {/* Recorder controls */}
             <Card className="p-4 bg-card/60 backdrop-blur-md border border-border">
@@ -440,10 +459,10 @@ export default function App() {
             </Card>
 
             {/* Configured nodes list */}
-            <Card className="flex-1 p-4 bg-card/60 backdrop-blur-md border border-border flex flex-col overflow-hidden min-h-[350px]">
+            <Card className="flex-1 p-4 bg-card/60 backdrop-blur-md border border-border flex flex-col overflow-hidden min-h-[350px] md:min-h-0">
               <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block mb-3">Sensor Nodes Inventory</span>
               
-              <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+              <div className="flex-1 overflow-y-auto flex flex-col gap-3.5 pr-1">
                 {SENSOR_POSITIONS.map((pos) => {
                   const sensor = sensors[pos.id]
                   const isConnected = sensor.status === 'connected'
@@ -527,7 +546,7 @@ export default function App() {
           </div>
 
           {/* RIGHT PANEL: Interactive Body Outline Visualizer */}
-          <Card className="flex-1 flex flex-col p-4 bg-card/60 backdrop-blur-md border border-border relative overflow-hidden">
+          <Card className="flex-1 flex flex-col p-4 bg-card/60 backdrop-blur-md border border-border relative overflow-hidden min-h-[500px] md:min-h-0">
             <div className="absolute top-4 left-4 z-10">
               <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block mb-1">Body Node Placement Map</span>
               <span className="text-[9px] font-mono text-muted-foreground/60">CLICK NODE TO ACCESS INDIVIDUAL CALIBRATION & LIVE SIGNAL GRAPHS</span>
@@ -535,19 +554,46 @@ export default function App() {
 
             {/* SVG silhouette container */}
             <div className="flex-1 relative w-full h-full flex items-center justify-center pt-8">
-              <svg viewBox="0 0 100 100" className="h-full max-h-[520px] text-muted-foreground/25 fill-current">
-                {/* Stylized Human Outline */}
-                <circle cx="50" cy="15" r="7" />
-                <rect x="48.5" y="22.2" width="3" height="2.5" rx="0.5" />
-                <path d="M 40 25 C 40 25, 60 25, 60 25 C 62 38, 58 50, 58 50 C 58 50, 42 50, 42 50 C 42 50, 38 38, 40 25" />
-                {/* Arms */}
-                <path d="M 40 26 C 36 29, 31 34, 28 42 C 27.5 43.5, 29 45, 30 44 C 33 41, 37 36, 39 31" />
-                <path d="M 60 26 C 64 29, 69 34, 72 42 C 72.5 43.5, 71 45, 70 44 C 67 41, 63 36, 61 31" />
-                {/* Hips */}
-                <path d="M 42 50 Q 50 51 58 50 C 60 55, 59 60, 59 60 C 59 60, 41 60, 41 60 C 41 60, 40 55, 42 50" />
-                {/* Legs */}
-                <path d="M 42 60 C 41.5 68, 43 76, 44 86 C 44.2 88, 41.5 89, 41 87 C 39.5 77, 39 68, 41 60" />
-                <path d="M 58 60 C 58.5 68, 57 76, 56 86 C 55.8 88, 58.5 89, 59 87 C 60.5 77, 61 68, 59 60" />
+              <svg viewBox="0 0 100 100" className="h-full max-h-[520px] text-muted-foreground/30 stroke-current" fill="none" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
+                <defs>
+                  <pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse">
+                    <path d="M 10 0 L 0 0 0 10" fill="none" stroke="currentColor" strokeWidth="0.08" opacity="0.15" />
+                  </pattern>
+                </defs>
+                <rect width="100" height="100" fill="url(#grid)" opacity="0.3" />
+
+                {/* Tech circles */}
+                <circle cx="50" cy="50" r="45" strokeDasharray="1 3" strokeWidth="0.4" opacity="0.25" />
+                <circle cx="50" cy="50" r="32" strokeDasharray="2 4" strokeWidth="0.4" opacity="0.15" />
+
+                {/* Human Silhouette Wireframe */}
+                {/* Head */}
+                <circle cx="50" cy="14" r="5" fill="currentColor" fillOpacity="0.03" strokeWidth="1.2" />
+                
+                {/* Neck & Shoulders */}
+                <path d="M 47 18.5 C 47 21, 40 22, 40 24" strokeWidth="1.2" />
+                <path d="M 53 18.5 C 53 21, 60 22, 60 24" strokeWidth="1.2" />
+
+                {/* Left Arm & Finger */}
+                <path d="M 40 24 L 32 34 L 24 44 L 16 48" strokeWidth="1.2" />
+                
+                {/* Right Arm & Finger */}
+                <path d="M 60 24 L 68 34 L 76 44 L 84 48" strokeWidth="1.2" />
+
+                {/* Torso & Hips */}
+                <path d="M 40 24 L 42 54 L 58 54 L 60 24 Z" fill="currentColor" fillOpacity="0.02" strokeWidth="1.2" />
+                <line x1="50" y1="19" x2="50" y2="54" strokeWidth="0.8" strokeDasharray="2 2" opacity="0.5" />
+                
+                {/* Rib lines (sci-fi detail) */}
+                <line x1="43" y1="30" x2="57" y2="30" strokeWidth="0.6" opacity="0.3" />
+                <line x1="44" y1="36" x2="56" y2="36" strokeWidth="0.6" opacity="0.3" />
+                <line x1="45" y1="42" x2="55" y2="42" strokeWidth="0.6" opacity="0.3" />
+
+                {/* Left Leg */}
+                <path d="M 43 54 L 42 84 L 38 87" strokeWidth="1.2" />
+
+                {/* Right Leg */}
+                <path d="M 57 54 L 58 84 L 62 87" strokeWidth="1.2" />
               </svg>
               
               {/* Interactive positioned markers */}
@@ -617,10 +663,10 @@ export default function App() {
 
       {/* ── INDIVIDUAL SENSOR DETAIL VIEW ── */}
       {currentPage === 'detail' && activeSensor && (
-        <main className="flex-1 flex overflow-hidden p-4 gap-4">
+        <main className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden p-4 gap-4">
           
           {/* LEFT COLUMN: Node Controls & Raw Logs */}
-          <div className="flex-1 flex flex-col gap-4 overflow-y-auto pr-1">
+          <div className="flex-1 flex flex-col gap-4 lg:overflow-y-auto pr-1">
             
             {/* Back panel */}
             <div className="flex justify-between items-center bg-card/60 border border-border p-3 rounded-xl backdrop-blur-md">
@@ -639,7 +685,17 @@ export default function App() {
             </div>
 
             {/* Real-time graphs */}
-            <div className="flex-1 grid grid-cols-1 gap-4 min-h-[500px]">
+            <div className="flex-1 flex flex-col gap-4 min-h-[680px]">
+              <RealTimeChart
+                title="PPG — Filtered Signal (BPM AC Waveform)"
+                channels={[
+                  { key: 'ppg_filt', color: '#a6e3a1', name: 'Filtered Signal' }
+                ]}
+                dataRef={dataRef}
+                yLabel="AC Amplitude"
+                autoScale={true}
+              />
+
               <RealTimeChart
                 title="PPG — Raw Signals (18-bit ADC)"
                 channels={[
@@ -648,6 +704,7 @@ export default function App() {
                 ]}
                 dataRef={dataRef}
                 yLabel="ADC Counts"
+                autoScale={true}
               />
 
               <RealTimeChart
@@ -659,12 +716,13 @@ export default function App() {
                 ]}
                 dataRef={dataRef}
                 yLabel="rad/s"
+                autoScale={true}
               />
             </div>
           </div>
 
           {/* RIGHT COLUMN: 3D Board & Node Details */}
-          <div className="w-[380px] flex flex-col gap-4 overflow-y-auto">
+          <div className="w-full lg:w-[380px] flex flex-col gap-4">
             
             {/* 3D Board Orientation Mesh */}
             <div className="h-[340px] flex-shrink-0">
@@ -780,10 +838,10 @@ export default function App() {
 
       {/* ── RECORDINGS DATABASE EXPLORER VIEW ── */}
       {currentPage === 'recordings' && (
-        <main className="flex-1 flex overflow-hidden p-4 gap-4">
+        <main className="flex-1 flex flex-col md:flex-row overflow-y-auto md:overflow-hidden p-4 gap-4">
           
           {/* LEFT PANEL: Sessions folder list */}
-          <Card className="w-[380px] p-4 bg-card/60 backdrop-blur-md border border-border flex flex-col overflow-hidden min-h-[350px]">
+          <Card className="w-full md:w-[380px] p-4 bg-card/60 backdrop-blur-md border border-border flex flex-col overflow-hidden min-h-[350px] md:min-h-0">
             <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block mb-3">Saved Session Folders</span>
             
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
@@ -823,12 +881,12 @@ export default function App() {
           </Card>
 
           {/* RIGHT PANEL: Session data plotter and viewer */}
-          <Card className="flex-1 p-4 bg-card/60 backdrop-blur-md border border-border flex flex-col overflow-hidden">
+          <Card className="flex-1 p-4 bg-card/60 backdrop-blur-md border border-border flex flex-col overflow-hidden min-h-[500px] md:min-h-0">
             {selectedSession ? (
               <div className="flex-1 flex flex-col overflow-hidden">
                 
                 {/* Session details */}
-                <div className="border-b border-border pb-3 mb-4 flex justify-between items-center flex-shrink-0">
+                <div className="border-b border-border pb-3 mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 flex-shrink-0">
                   <div>
                     <h2 className="text-sm font-bold text-foreground">{selectedSession.name.replace(/_/g, ' ')}</h2>
                     <span className="text-[10px] font-mono text-muted-foreground">
@@ -837,7 +895,7 @@ export default function App() {
                   </div>
 
                   {/* CSV File selector */}
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     {selectedSession.files.map((file: any) => (
                       <Button
                         key={file.filename}
@@ -856,33 +914,95 @@ export default function App() {
                 {/* Plotter area */}
                 {selectedFile ? (
                   recordingData.length > 0 ? (
-                    <div className="flex-1 grid grid-cols-1 gap-4 overflow-y-auto pr-1 min-h-[400px]">
-                      {/* PPG Static Chart */}
-                      <RealTimeChart
-                        title={`PPG Raw Waveform Database Plot - ${selectedFile.position.replace('_', ' ').toUpperCase()}`}
-                        channels={[
-                          { key: 'red', color: '#f38ba8', name: 'Red LED' },
-                          { key: 'ir', color: '#cba6f7', name: 'Infrared LED' }
-                        ]}
-                        dataRef={staticPpgRef}
-                        maxSamples={staticPpgRef.current.length}
-                        yLabel="Counts"
-                        autoScale={true}
-                      />
+                    <div className="flex-1 flex flex-col gap-4 overflow-y-auto pr-1">
+                      {/* Timeline range selector */}
+                      <Card className="p-3 bg-muted/20 border border-border/60 flex flex-col gap-2 rounded-xl flex-shrink-0">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="font-bold text-muted-foreground uppercase tracking-wider text-[9px]">Timeline Range Zoom</span>
+                          <span className="font-mono text-primary font-bold">
+                            {sessionRange[0]}% - {sessionRange[1]}%
+                            {` (${Math.round((sessionRange[0] / 100) * recordingData.length)} to ${Math.round((sessionRange[1] / 100) * recordingData.length)} of ${recordingData.length} samples)`}
+                          </span>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                          <div className="md:col-span-5 flex gap-2 items-center">
+                            <span className="text-[10px] text-muted-foreground font-semibold uppercase w-10">Start</span>
+                            <input
+                              type="range"
+                              min="0"
+                              max={Math.min(99, sessionRange[1] - 1)}
+                              value={sessionRange[0]}
+                              onChange={(e) => setSessionRange([parseInt(e.target.value), sessionRange[1]])}
+                              className="w-full h-1.5 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary focus:outline-none"
+                            />
+                          </div>
+                          
+                          <div className="md:col-span-5 flex gap-2 items-center">
+                            <span className="text-[10px] text-muted-foreground font-semibold uppercase w-10">End</span>
+                            <input
+                              type="range"
+                              min={Math.max(1, sessionRange[0] + 1)}
+                              max="100"
+                              value={sessionRange[1]}
+                              onChange={(e) => setSessionRange([sessionRange[0], parseInt(e.target.value)])}
+                              className="w-full h-1.5 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary focus:outline-none"
+                            />
+                          </div>
 
-                      {/* IMU Static Chart */}
-                      <RealTimeChart
-                        title={`IMU Angular Velocity Database Plot - ${selectedFile.position.replace('_', ' ').toUpperCase()}`}
-                        channels={[
-                          { key: 'gx', color: '#f38ba8', name: 'Axis X' },
-                          { key: 'gy', color: '#a6e3a1', name: 'Axis Y' },
-                          { key: 'gz', color: '#89b4fa', name: 'Axis Z' }
-                        ]}
-                        dataRef={staticImuRef}
-                        maxSamples={staticImuRef.current.length}
-                        yLabel="rad/s"
-                        autoScale={true}
-                      />
+                          <div className="md:col-span-2 flex justify-end">
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              onClick={() => setSessionRange([0, 100])}
+                              className="text-[10px] h-7 px-2 font-bold w-full md:w-auto"
+                            >
+                              Reset
+                            </Button>
+                          </div>
+                        </div>
+                      </Card>
+
+                      <div className="flex-1 flex flex-col gap-4 min-h-[500px]">
+                        {/* Filtered PPG Static Chart */}
+                        <RealTimeChart
+                          title={`PPG Filtered Signal Database Plot - ${selectedFile.position.replace('_', ' ').toUpperCase()}`}
+                          channels={[
+                            { key: 'ppg_filt', color: '#a6e3a1', name: 'Filtered Signal' }
+                          ]}
+                          dataRef={staticPpgFiltRef}
+                          maxSamples={staticPpgFiltRef.current.length}
+                          yLabel="AC Amplitude"
+                          autoScale={true}
+                        />
+
+                        {/* PPG Static Chart */}
+                        <RealTimeChart
+                          title={`PPG Raw Waveform Database Plot - ${selectedFile.position.replace('_', ' ').toUpperCase()}`}
+                          channels={[
+                            { key: 'red', color: '#f38ba8', name: 'Red LED' },
+                            { key: 'ir', color: '#cba6f7', name: 'Infrared LED' }
+                          ]}
+                          dataRef={staticPpgRef}
+                          maxSamples={staticPpgRef.current.length}
+                          yLabel="Counts"
+                          autoScale={true}
+                        />
+
+                        {/* IMU Static Chart */}
+                        <RealTimeChart
+                          title={`IMU Angular Velocity Database Plot - ${selectedFile.position.replace('_', ' ').toUpperCase()}`}
+                          channels={[
+                            { key: 'gx', color: '#f38ba8', name: 'Axis X' },
+                            { key: 'gy', color: '#a6e3a1', name: 'Axis Y' },
+                            { key: 'gz', color: '#89b4fa', name: 'Axis Z' }
+                          ]}
+                          dataRef={staticImuRef}
+                          maxSamples={staticImuRef.current.length}
+                          yLabel="rad/s"
+                          autoScale={true}
+                        />
+                      </div>
                     </div>
                   ) : (
                     <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground/60 italic">

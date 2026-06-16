@@ -127,7 +127,8 @@ export function startSidecar(mainWindow: BrowserWindow): void {
               if (rec && json.type === 'sample') {
                 const elapsed = (Date.now() - rec.startTime) / 1000
                 const q = json.quat || [1, 0, 0, 0]
-                const row = `${enriched.timestamp || new Date().toISOString()},${elapsed},${json.ax},${json.ay},${json.az},${json.gx},${json.gy},${json.gz},${q[0]},${q[1]},${q[2]},${q[3]},${json.red},${json.ir},${json.bpm !== null ? json.bpm : ''},${json.contact ? 1 : 0}\n`
+                const ppgFiltVal = json.ppg_filt !== undefined && json.ppg_filt !== null ? json.ppg_filt : 0.0
+                const row = `${enriched.timestamp || new Date().toISOString()},${elapsed},${json.ax},${json.ay},${json.az},${json.gx},${json.gy},${json.gz},${q[0]},${q[1]},${q[2]},${q[3]},${json.red},${json.ir},${ppgFiltVal},${json.bpm !== null ? json.bpm : ''},${json.contact ? 1 : 0}\n`
                 rec.writeStream.write(row)
               }
             }
@@ -211,7 +212,7 @@ export function startSidecar(mainWindow: BrowserWindow): void {
         const writeStream = createWriteStream(filePath)
         
         // Write header
-        writeStream.write("timestamp,elapsed_s,ax,ay,az,gx,gy,gz,qw,qx,qy,qz,ppg_red,ppg_ir,bpm,contact\n")
+        writeStream.write("timestamp,elapsed_s,ax,ay,az,gx,gy,gz,qw,qx,qy,qz,ppg_red,ppg_ir,ppg_filt,bpm,contact\n")
         
         activeRecordings.set(id, {
           writeStream,
@@ -322,28 +323,50 @@ export function startSidecar(mainWindow: BrowserWindow): void {
       const headers = lines[0].split(',')
       const data: any[] = []
 
+      const idx = {
+        timestamp: headers.indexOf('timestamp'),
+        elapsed: headers.indexOf('elapsed_s'),
+        ax: headers.indexOf('ax'),
+        ay: headers.indexOf('ay'),
+        az: headers.indexOf('az'),
+        gx: headers.indexOf('gx'),
+        gy: headers.indexOf('gy'),
+        gz: headers.indexOf('gz'),
+        qw: headers.indexOf('qw'),
+        qx: headers.indexOf('qx'),
+        qy: headers.indexOf('qy'),
+        qz: headers.indexOf('qz'),
+        red: headers.indexOf('ppg_red'),
+        ir: headers.indexOf('ppg_ir'),
+        ppg_filt: headers.indexOf('ppg_filt'),
+        bpm: headers.indexOf('bpm'),
+        contact: headers.indexOf('contact')
+      }
+
       for (let i = 1; i < lines.length; i++) {
         const line = lines[i].trim()
         if (!line) continue
         const cols = line.split(',')
-        if (cols.length < headers.length) continue
+        if (cols.length < 10) continue
 
         data.push({
-          timestamp: cols[0],
-          elapsed: parseFloat(cols[1]),
-          ax: parseFloat(cols[2]),
-          ay: parseFloat(cols[3]),
-          az: parseFloat(cols[4]),
-          gx: parseFloat(cols[5]),
-          gy: parseFloat(cols[6]),
-          qw: parseFloat(cols[7]),
-          qx: parseFloat(cols[8]),
-          qy: parseFloat(cols[9]),
-          qz: parseFloat(cols[10]),
-          red: parseFloat(cols[11]),
-          ir: parseFloat(cols[12]),
-          bpm: cols[13] ? parseFloat(cols[13]) : null,
-          contact: cols[14] === '1'
+          timestamp: idx.timestamp !== -1 ? cols[idx.timestamp] : '',
+          elapsed: idx.elapsed !== -1 ? parseFloat(cols[idx.elapsed]) : 0,
+          ax: idx.ax !== -1 ? parseFloat(cols[idx.ax]) : 0,
+          ay: idx.ay !== -1 ? parseFloat(cols[idx.ay]) : 0,
+          az: idx.az !== -1 ? parseFloat(cols[idx.az]) : 0,
+          gx: idx.gx !== -1 ? parseFloat(cols[idx.gx]) : 0,
+          gy: idx.gy !== -1 ? parseFloat(cols[idx.gy]) : 0,
+          gz: idx.gz !== -1 ? parseFloat(cols[idx.gz]) : 0,
+          qw: idx.qw !== -1 ? parseFloat(cols[idx.qw]) : 1,
+          qx: idx.qx !== -1 ? parseFloat(cols[idx.qx]) : 0,
+          qy: idx.qy !== -1 ? parseFloat(cols[idx.qy]) : 0,
+          qz: idx.qz !== -1 ? parseFloat(cols[idx.qz]) : 0,
+          red: idx.red !== -1 ? parseFloat(cols[idx.red]) : 0,
+          ir: idx.ir !== -1 ? parseFloat(cols[idx.ir]) : 0,
+          ppg_filt: idx.ppg_filt !== -1 ? parseFloat(cols[idx.ppg_filt]) : 0,
+          bpm: (idx.bpm !== -1 && cols[idx.bpm]) ? parseFloat(cols[idx.bpm]) : null,
+          contact: idx.contact !== -1 ? cols[idx.contact] === '1' : false
         })
       }
 
