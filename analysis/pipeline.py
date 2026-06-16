@@ -7,12 +7,16 @@ Takes a raw logger CSV and produces two enriched files:
   <stem>_beats.csv     — per-heartbeat metrics
 
 Per-sample columns added:
-  red_filt, ir_filt       — bandpass-filtered PPG (0.5–4 Hz, AC / pulse signal)
+  red_filt, ir_filt       — bandpass-filtered PPG (0.5–8 Hz, AC / pulse signal)
+  ir_clean, red_clean      — red_filt/ir_filt with motion artifact regressed out
   red_dc,   ir_dc         — low-pass baseline (DC component)
   roll_deg, pitch_deg, yaw_deg — Madgwick orientation (degrees)
   qw, qx, qy, qz          — orientation quaternion
   accel_mag_g              — dynamic acceleration magnitude (g), gravity removed
   motion                   — 1 if accel_mag_g > threshold (motion artifact risk)
+  contact                  — 1 if the IR DC level indicates skin contact
+                              (see CONTACT_IR_MIN — open air reads ~100-300
+                              counts on this hardware, skin contact ~29000+)
 
 Per-beat columns:
   beat_time   — timestamp of the peak (s)
@@ -21,6 +25,10 @@ Per-beat columns:
   rmssd_ms    — HRV short-term metric over last 5 beats (ms)
   spo2_pct    — SpO2 estimate via Red/IR ratio model (%)
   motion_artifact — 1 if any motion detected in the beat window
+
+Beats and spectral BPM windows during periods without skin contact
+(see CONTACT_IR_MIN) are dropped entirely, not just flagged — an
+unworn sensor has no physiological signal to report.
 
 Usage:
     make process FILE=logs/2026-06-15_14-32.csv
@@ -85,6 +93,18 @@ IBI_MAX_DEVIATION = 0.3
 # swamped by motion) — avoids locking onto the band edge, e.g. 210 BPM.
 SPECTRAL_SNR_MIN = 2.0
 
+# Skin-contact detection: the MAX30102 IR photodiode reads a near-baseline
+# DC level with nothing in front of it (only ambient light) and a much
+# higher one once skin is backscattering the LED. Measured on this hardware
+# (6.2 mA LED, see CLAUDE.md): ~100-300 counts in open air vs ~29000+ with
+# a finger on the sensor — a comfortable 2 orders of magnitude apart, so a
+# single fixed threshold is reliable here. If you change LED current/gain
+# in prj.conf, recheck with `make term` (open air vs finger) and adjust.
+CONTACT_IR_MIN  = 5000   # raw ADC counts
+CONTACT_DC_HZ   = 2.0    # lowpass for the contact-detection DC estimate —
+                          # faster than PPG_DC_HZ so contact loss is caught
+                          # within ~1 cardiac cycle instead of ~10 s
+
 # Motion detection: dynamic accel magnitude threshold (g, gravity removed)
 MOTION_THRESH_G = 0.05
 
@@ -143,7 +163,7 @@ def _parabolic_peak(spec, k):
     return k + float(np.clip(offset, -0.5, 0.5))
 
 
-def spectral_bpm(signal, accel_mag, fs=FS, window_s=8.0, step_s=2.0):
+def spectral_bpm(signal, accel_mag, contact, fs=FS, window_s=8.0, step_s=2.0):
     """Sliding-window FFT heart rate estimator (motion-robust).
 
     Suppresses FFT bins where the accelerometer spectrum dominates so the
@@ -151,6 +171,7 @@ def spectral_bpm(signal, accel_mag, fs=FS, window_s=8.0, step_s=2.0):
     without a clear cardiac peak (no finger, or motion swamping the signal)
     are skipped rather than reported — without this gate the argmax can
     lock onto the band edge (e.g. a flat 210 BPM ceiling) on pure noise.
+    Windows mostly out of skin contact are skipped outright.
 
     Returns (times_s, bpms) arrays aligned to window centres.
     """
@@ -167,6 +188,9 @@ def spectral_bpm(signal, accel_mag, fs=FS, window_s=8.0, step_s=2.0):
 
     times, bpms = [], []
     for start in range(0, N - win, step):
+        if contact[start:start + win].mean() < 0.5:
+            continue  # mostly no skin contact in this window — nothing to estimate
+
         ppg_spec   = np.abs(np.fft.rfft(signal[start:start + win]    * hann))
         accel_spec = np.abs(np.fft.rfft(accel_mag[start:start + win] * hann))
 
@@ -240,16 +264,25 @@ def rolling_rms(sig, window_s, fs=FS):
     return np.sqrt(s.rolling(win, center=True, min_periods=1).mean().to_numpy())
 
 
+def compute_contact(ir_raw, fs=FS):
+    """Skin-contact mask from the raw IR DC level — see CONTACT_IR_MIN."""
+    dc = lowpass(ir_raw, CONTACT_DC_HZ, fs=fs)
+    return dc > CONTACT_IR_MIN
+
+
 # ── Beat detection & per-beat metrics ─────────────────────────────────────────
-def compute_beats(ts, ir_beat, ir_filt, red_filt, ir_dc, red_dc, motion):
+def compute_beats(ts, ir_beat, ir_filt, red_filt, ir_dc, red_dc, motion, contact):
     """Detect heartbeats on the narrowband `ir_beat` signal (fundamental
     only — robust against harmonics/dicrotic notch), then pull SpO2/AC
     amplitude from the wideband `ir_filt`/`red_filt` over each beat's
-    segment (those need the full pulse shape, not just the fundamental)."""
+    segment (those need the full pulse shape, not just the fundamental).
+    Peaks outside skin contact (see `contact`) are discarded up front —
+    an unworn sensor has no heartbeat to find."""
     min_dist = int(FS * 0.33)             # minimum 0.33 s between peaks (max 180 BPM)
     height   = RMS_HEIGHT_FACTOR * rolling_rms(ir_beat, RMS_WINDOW_S)
 
     peaks, _ = find_peaks(ir_beat, height=height, distance=min_dist)
+    peaks    = peaks[contact[peaks]]
     if len(peaks) < 2:
         return pd.DataFrame()
 
@@ -332,6 +365,10 @@ def main():
     ir_filt  = bandpass(ir_raw,  PPG_LOW_HZ, PPG_HIGH_HZ)
     red_dc   = lowpass(red_raw,  PPG_DC_HZ)
     ir_dc    = lowpass(ir_raw,   PPG_DC_HZ)
+    contact  = compute_contact(ir_raw)
+    if not contact.any():
+        print("WARNING: no skin contact detected anywhere in this recording "
+              "— was the sensor worn?")
 
     # ── IMU orientation ────────────────────────────────────────────────────────
     print("Running Madgwick filter...")
@@ -356,13 +393,13 @@ def main():
 
     # ── Spectral BPM track (motion-robust FFT) ─────────────────────────────────
     print("Computing spectral BPM track...")
-    bpm_times, bpm_vals = spectral_bpm(ir_clean, accel_mag)
+    bpm_times, bpm_vals = spectral_bpm(ir_clean, accel_mag, contact)
 
     # ── Beat metrics (fundamental-only signal for peak picking) ───────────────
     print("Detecting heartbeats...")
     ts      = df["timestamp"].to_numpy()
     ir_beat = bandpass(ir_clean, BEAT_LOW_HZ, BEAT_HIGH_HZ)
-    beats_df = compute_beats(ts, ir_beat, ir_clean, red_clean, ir_dc, red_dc, motion)
+    beats_df = compute_beats(ts, ir_beat, ir_clean, red_clean, ir_dc, red_dc, motion, contact)
 
     if not beats_df.empty:
         mean_bpm = beats_df["bpm"].mean()
@@ -399,6 +436,7 @@ def main():
     enriched["qz"]          = np.round(quats[:, 3],   5)
     enriched["accel_mag_g"] = np.round(accel_mag,     4)
     enriched["motion"]      = motion.astype(int)
+    enriched["contact"]     = contact.astype(int)
 
     # ── Save ───────────────────────────────────────────────────────────────────
     stem          = in_path.stem
