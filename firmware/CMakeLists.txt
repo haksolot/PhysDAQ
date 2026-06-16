@@ -14,4 +14,5 @@ target_sources(app PRIVATE
     src/max30102.c
     src/power.c
     src/ble.c
+    src/battery.c
 )
