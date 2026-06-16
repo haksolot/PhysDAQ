@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 
 interface BoardVisualizerProps {
   quat: [number, number, number, number] // [w, x, y, z]
@@ -8,6 +9,7 @@ interface BoardVisualizerProps {
 export function BoardVisualizer({ quat }: BoardVisualizerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const quatRef = useRef<[number, number, number, number]>(quat)
+  const idleAngle = useRef<number>(0)
 
   // Sync prop changes to ref to avoid re-triggering useEffect
   useEffect(() => {
@@ -59,8 +61,8 @@ export function BoardVisualizer({ quat }: BoardVisualizerProps) {
     const boardHeight = 1.75
     const boardThickness = 0.12
 
-    // Create PCB
-    const pcbGeometry = new THREE.BoxGeometry(boardWidth, boardThickness, boardHeight)
+    // Create PCB (Z-up coordinate system: X=width, Y=height, Z=thickness)
+    const pcbGeometry = new THREE.BoxGeometry(boardWidth, boardHeight, boardThickness)
     const pcbMaterial = new THREE.MeshStandardMaterial({
       color: '#1a5c24', // Nice dark green PCB color
       roughness: 0.2,
@@ -88,41 +90,41 @@ export function BoardVisualizer({ quat }: BoardVisualizerProps) {
     for (let i = 0; i < numPads; i++) {
       const x = startX + i * stepX
       // Left side pads
-      const padLeftGeom = new THREE.BoxGeometry(padWidth, padHeight, padDepth)
+      const padLeftGeom = new THREE.BoxGeometry(padWidth, padDepth, padHeight)
       const padLeft = new THREE.Mesh(padLeftGeom, padMaterial)
-      padLeft.position.set(x, boardThickness / 2 + 0.005, -boardHeight / 2 + 0.1)
+      padLeft.position.set(x, -boardHeight / 2 + 0.1, boardThickness / 2 + 0.01)
       boardGroup.add(padLeft)
 
       // Right side pads
       const padRight = padLeft.clone()
-      padRight.position.z = boardHeight / 2 - 0.1
+      padRight.position.y = boardHeight / 2 - 0.1
       boardGroup.add(padRight)
     }
 
     // Add main chip (MCU)
-    const mcuGeometry = new THREE.BoxGeometry(0.6, 0.08, 0.6)
+    const mcuGeometry = new THREE.BoxGeometry(0.6, 0.6, 0.08)
     const mcuMaterial = new THREE.MeshStandardMaterial({
       color: '#11111b', // Dark metal chip
       roughness: 0.5,
       metalness: 0.5
     })
     const mcu = new THREE.Mesh(mcuGeometry, mcuMaterial)
-    mcu.position.set(-0.3, boardThickness / 2 + 0.04, 0)
+    mcu.position.set(-0.3, 0, boardThickness / 2 + 0.04)
     boardGroup.add(mcu)
 
     // Add IMU Sensor
-    const imuGeometry = new THREE.BoxGeometry(0.25, 0.05, 0.25)
+    const imuGeometry = new THREE.BoxGeometry(0.25, 0.25, 0.05)
     const imuMaterial = new THREE.MeshStandardMaterial({
       color: '#313244',
       roughness: 0.6,
       metalness: 0.4
     })
     const imu = new THREE.Mesh(imuGeometry, imuMaterial)
-    imu.position.set(0.3, boardThickness / 2 + 0.025, -0.25)
+    imu.position.set(0.3, -0.25, boardThickness / 2 + 0.025)
     boardGroup.add(imu)
 
     // Add USB-C connector
-    const usbGeometry = new THREE.BoxGeometry(0.4, 0.15, 0.45)
+    const usbGeometry = new THREE.BoxGeometry(0.4, 0.45, 0.15)
     const usbMaterial = new THREE.MeshStandardMaterial({
       color: '#cdd6f4', // Silver metal
       roughness: 0.1,
@@ -132,12 +134,15 @@ export function BoardVisualizer({ quat }: BoardVisualizerProps) {
     usb.position.set(-boardWidth / 2 - 0.05, 0, 0)
     boardGroup.add(usb)
 
-    scene.add(boardGroup)
-
-    // Axes helper
+    // Axes helper (Body axes, rotating with the board)
     const axesHelper = new THREE.AxesHelper(1.5)
-    // Position it at the center of the board
     boardGroup.add(axesHelper)
+
+    // Create a parent group to map Z-up (NWU) to Y-up (Three.js world)
+    const parentGroup = new THREE.Group()
+    parentGroup.rotation.x = -Math.PI / 2
+    parentGroup.add(boardGroup)
+    scene.add(parentGroup)
 
     // Resize Handler
     const handleResize = (): void => {
@@ -155,20 +160,16 @@ export function BoardVisualizer({ quat }: BoardVisualizerProps) {
       // Get latest quaternion
       const [w, x, y, z] = quatRef.current
 
-      // Update orientation
-      // Madgwick outputs NWU quaternion [w, x, y, z].
-      // In Three.js coordinates, we set quaternion of the board mesh:
-      // Note: we swap axes to align Three.js coordinate system (Y-up, X-right, Z-out)
-      // with the IMU NWU orientation.
-      // Usually, Three.js expects: x, y, z, w.
-      // Let's set it directly and apply rotation offsets if needed.
-      const q = new THREE.Quaternion(x, y, z, w)
-      boardGroup.quaternion.copy(q)
-
-      // Slow rotation for background effect if no data is arriving
       if (w === 1.0 && x === 0.0 && y === 0.0 && z === 0.0) {
-        boardGroup.rotation.y += 0.005
-        boardGroup.rotation.x = 0.3
+        // Slow idle rotation in Z-up
+        idleAngle.current += 0.005
+        const tiltQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.3)
+        const rotQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), idleAngle.current)
+        boardGroup.quaternion.copy(tiltQ.multiply(rotQ))
+      } else {
+        // Set quaternion directly in NWU space
+        const q = new THREE.Quaternion(x, y, z, w)
+        boardGroup.quaternion.copy(q)
       }
 
       renderer.render(scene, camera)
@@ -188,14 +189,14 @@ export function BoardVisualizer({ quat }: BoardVisualizerProps) {
   }, [])
 
   return (
-    <div className="flex flex-col h-full rounded-xl bg-[#181825]/60 border border-[#313244]/50 backdrop-blur-md overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2 bg-[#1e1e2e]/40 border-b border-[#313244]/40">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-[#a6adc8]">3D Board Orientation</h3>
-        <div className="flex gap-2">
-          <span className="text-[10px] font-mono text-[#89b4fa] bg-[#89b4fa]/10 px-2 py-0.5 rounded border border-[#89b4fa]/20">NWU AHRS</span>
-        </div>
-      </div>
-      <div className="flex-1 min-h-[300px] relative" ref={containerRef} />
-    </div>
+    <Card className="flex flex-col h-full bg-card/60 backdrop-blur-md overflow-hidden border !p-0 !gap-0">
+      <CardHeader className="flex flex-row items-center justify-between !px-4 !py-3 space-y-0 border-b bg-muted/20 !pb-3">
+        <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground animate-none">3D Board Orientation</CardTitle>
+        <span className="text-[10px] font-mono text-primary bg-primary/10 px-2 py-0.5 rounded border border-primary/20">
+          NWU AHRS
+        </span>
+      </CardHeader>
+      <CardContent className="flex-1 min-h-[200px] relative !p-0" ref={containerRef} />
+    </Card>
   )
 }

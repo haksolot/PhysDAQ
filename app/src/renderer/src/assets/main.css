@@ -1,10 +1,31 @@
 @import "tailwindcss";
 @import './base.css';
 
+@theme {
+  --color-background: #1e1e2e;
+  --color-foreground: #cdd6f4;
+  --color-card: #181825;
+  --color-card-foreground: #cdd6f4;
+  --color-popover: #11111b;
+  --color-popover-foreground: #cdd6f4;
+  --color-primary: #cba6f7;
+  --color-primary-foreground: #11111b;
+  --color-secondary: #313244;
+  --color-secondary-foreground: #cdd6f4;
+  --color-muted: #313244;
+  --color-muted-foreground: #bac2de;
+  --color-accent: #313244;
+  --color-accent-foreground: #cdd6f4;
+  --color-destructive: #f38ba8;
+  --color-destructive-foreground: #11111b;
+  --color-border: #313244;
+  --color-input: #313244;
+  --color-ring: #cba6f7;
+}
+
 body {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  margin: 0;
+  padding: 0;
   overflow: hidden;
   background-image: url('./wavy-lines.svg');
   background-size: cover;
@@ -28,11 +49,10 @@ code {
 }
 
 #root {
+  width: 100vw;
+  height: 100vh;
   display: flex;
-  align-items: center;
-  justify-content: center;
   flex-direction: column;
-  margin-bottom: 80px;
 }
 
 .logo {
@@ -197,4 +217,23 @@ code {
 
 .text-fill-color-transparent {
   -webkit-text-fill-color: transparent;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #313244;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #45475a;
 }

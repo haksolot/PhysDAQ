@@ -9,13 +9,25 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import {
+  Card,
+  CardContent
+} from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
+import { Input } from '@/components/ui/input'
 import { 
   Heart, 
   Bluetooth, 
   Usb, 
   Activity, 
   Battery as BatteryIcon, 
-  Wifi, 
+  Fingerprint, 
   WifiOff, 
   Cpu, 
   RefreshCw 
@@ -204,63 +216,64 @@ export default function App() {
 
   const handleConnect = (): void => {
     wasConnected.current = false
+    const finalTarget = target === 'auto-detect' ? '' : target
     window.api.restartSidecar({
       mode,
-      portOrAddr: target.trim() || undefined
+      portOrAddr: finalTarget.trim() || undefined
     })
-    setLogs((prev) => [`[UI] Connection request: ${mode} ${target}`, ...prev])
+    setLogs((prev) => [`[UI] Connection request: ${mode} ${finalTarget}`, ...prev])
   }
 
   // Heart beat animation speed based on BPM
   const heartAnimDuration = bpm ? `${60 / bpm}s` : '1.2s'
 
   return (
-    <div className="w-screen h-screen flex flex-col bg-[#1e1e2e] text-[#cdd6f4] font-sans overflow-hidden">
+    <div className="w-screen h-screen flex flex-col bg-background text-foreground font-sans overflow-hidden">
       
       {/* ── HEADER ── */}
-      <header className="flex items-center justify-between px-6 py-4 bg-[#11111b]/80 border-b border-[#313244] backdrop-blur-md z-10">
+      <header className="flex items-center justify-between px-6 py-4 bg-card/80 border-b border-border backdrop-blur-md z-10">
         <div className="flex items-center gap-3">
-          <Activity className="w-7 h-7 text-[#f38ba8] animate-pulse" />
+          <Activity className="w-7 h-7 text-destructive animate-pulse" />
           <div>
-            <h1 className="text-lg font-bold tracking-tight text-[#cdd6f4]">
+            <h1 className="text-lg font-bold tracking-tight text-foreground">
               MAID Wearable Interface
             </h1>
-            <p className="text-[10px] font-mono text-[#a6adc8]">ACQUISITION & ANALYSIS SYSTEM</p>
+            <p className="text-[10px] font-mono text-muted-foreground">ACQUISITION & ANALYSIS SYSTEM</p>
           </div>
         </div>
 
         {/* Status bar */}
         <div className="flex items-center gap-6">
           {/* Connection status badge */}
-          <div className="flex items-center gap-2 bg-[#181825] px-3 py-1.5 rounded-lg border border-[#313244]">
+          <div className="flex items-center gap-2 bg-muted/40 px-3 py-1.5 rounded-lg border border-border">
             {status.status === 'connected' ? (
               <>
                 <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#a6e3a1] opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-[#a6e3a1]"></span>
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                 </span>
-                <span className="text-xs font-semibold text-[#a6e3a1]">
+                <span className="text-xs font-semibold text-emerald-500">
                   CONNECTED {status.port ? `(${status.port})` : status.ble_addr ? `(${status.ble_addr})` : ''}
                 </span>
               </>
             ) : (
               <>
-                <span className="h-2 w-2 rounded-full bg-[#f38ba8]"></span>
-                <span className="text-xs font-semibold text-[#f38ba8]">DISCONNECTED</span>
+                <span className="h-2 w-2 rounded-full bg-destructive"></span>
+                <span className="text-xs font-semibold text-destructive">DISCONNECTED</span>
               </>
             )}
           </div>
 
           {/* Battery Status */}
           {battery && (
-            <div className="flex items-center gap-2 bg-[#181825] px-3 py-1.5 rounded-lg border border-[#313244]">
+            <div className="flex items-center gap-2 bg-muted/40 px-3 py-1.5 rounded-lg border border-border">
               {battery.pct > 20 ? (
-                <BatteryIcon className="w-5 h-5 text-[#a6e3a1]" />
+                <BatteryIcon className="w-5 h-5 text-emerald-500" />
               ) : (
-                <BatteryIcon className="w-5 h-5 text-[#f38ba8] animate-bounce" />
+                <BatteryIcon className="w-5 h-5 text-destructive animate-bounce" />
               )}
-              <span className="text-xs font-mono font-bold text-[#cdd6f4]">
-                {battery.pct}% <span className="text-[10px] text-[#a6adc8]">({battery.mv} mV)</span>
+              <span className="text-xs font-mono font-bold text-foreground">
+                {battery.pct}% <span className="text-[10px] text-muted-foreground">({battery.mv} mV)</span>
               </span>
             </div>
           )}
@@ -274,112 +287,109 @@ export default function App() {
         <div className="flex-1 flex flex-col gap-4 overflow-y-auto pr-1">
           
           {/* Connection configuration card */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-4 rounded-xl bg-[#181825]/60 border border-[#313244]/50 backdrop-blur-md">
-            
-            {/* Mode selection */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-[#a6adc8]">Transport Mode</label>
-              <div className="flex bg-[#11111b] p-1 rounded-lg border border-[#313244]">
-                <button
-                  onClick={() => { setMode('serial'); setTarget('') }}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium transition-all ${
-                    mode === 'serial' ? 'bg-[#313244] text-[#cdd6f4]' : 'text-[#a6adc8] hover:text-[#cdd6f4]'
-                  }`}
-                >
-                  <Usb className="w-3.5 h-3.5" />
-                  USB Serial
-                </button>
-                <button
-                  onClick={() => { setMode('ble'); setTarget('') }}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium transition-all ${
-                    mode === 'ble' ? 'bg-[#313244] text-[#cdd6f4]' : 'text-[#a6adc8] hover:text-[#cdd6f4]'
-                  }`}
-                >
-                  <Bluetooth className="w-3.5 h-3.5" />
-                  BLE NUS
-                </button>
-              </div>
-            </div>
-
-            {/* Target Select & Input */}
-            <div className="flex flex-col gap-1.5 md:col-span-2">
-              <div className="flex justify-between items-center">
-                <label className="text-[10px] font-bold uppercase tracking-wider text-[#a6adc8]">
-                  {mode === 'serial' ? 'Select Port' : 'Select Device'}
-                </label>
-                {mode === 'serial' ? (
-                  <button 
-                    onClick={fetchPorts} 
-                    disabled={isFetchingPorts}
-                    className="text-[10px] text-[#cba6f7] hover:underline flex items-center gap-1 font-semibold focus:outline-none"
+          <Card className="bg-card/60 backdrop-blur-md border border-border">
+            <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end p-4">
+              
+              {/* Mode selection */}
+              <div className="flex flex-col gap-1.5 w-full">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block h-4">Transport Mode</span>
+                <div className="flex bg-muted/40 p-1 rounded-lg border border-border h-9 items-center w-full">
+                  <Button
+                    variant={mode === 'serial' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    onClick={() => { setMode('serial'); setTarget('') }}
+                    className="flex-1 h-7"
                   >
-                    <RefreshCw className={`w-2.5 h-2.5 ${isFetchingPorts ? 'animate-spin' : ''}`} />
-                    Refresh Ports
-                  </button>
-                ) : (
-                  <button 
-                    onClick={startBleScan} 
-                    disabled={isScanning}
-                    className="text-[10px] text-[#cba6f7] hover:underline flex items-center gap-1 font-semibold focus:outline-none"
+                    <Usb className="w-3.5 h-3.5" />
+                    USB Serial
+                  </Button>
+                  <Button
+                    variant={mode === 'ble' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    onClick={() => { setMode('ble'); setTarget('') }}
+                    className="flex-1 h-7"
                   >
-                    <RefreshCw className={`w-2.5 h-2.5 ${isScanning ? 'animate-spin' : ''}`} />
-                    {isScanning ? 'Scanning...' : 'Scan Devices'}
-                  </button>
-                )}
+                    <Bluetooth className="w-3.5 h-3.5" />
+                    BLE NUS
+                  </Button>
+                </div>
               </div>
 
-              <div className="flex gap-2">
-                {mode === 'serial' ? (
-                  <select
-                    value={target}
-                    onChange={(e) => setTarget(e.target.value)}
-                    className="bg-[#11111b] text-xs px-3 py-2.5 rounded-lg border border-[#313244] focus:outline-none focus:border-[#cba6f7] transition-all font-mono flex-1 text-[#cdd6f4]"
-                  >
-                    <option value="">-- Auto-detect --</option>
-                    {serialPorts.map((p) => (
-                      <option key={p.port} value={p.port}>
-                        {p.port} {p.desc ? ` - ${p.desc}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <select
-                    value={target}
-                    onChange={(e) => setTarget(e.target.value)}
-                    className="bg-[#11111b] text-xs px-3 py-2.5 rounded-lg border border-[#313244] focus:outline-none focus:border-[#cba6f7] transition-all font-mono flex-1 text-[#cdd6f4]"
-                  >
-                    <option value="">-- Auto-detect / Scan --</option>
-                    {bleDevices.map((d) => (
-                      <option key={d.address} value={d.address}>
-                        {d.name} ({d.address})
-                      </option>
-                    ))}
-                  </select>
-                )}
-                
-                {/* Manual override input (optional) */}
-                <input
+              {/* Target Select */}
+              <div className="flex flex-col gap-1.5 w-full">
+                <div className="flex justify-between items-center h-4">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    {mode === 'serial' ? 'Select Port' : 'Select Device'}
+                  </label>
+                  {mode === 'serial' ? (
+                    <button 
+                      onClick={fetchPorts} 
+                      disabled={isFetchingPorts}
+                      className="text-[10px] text-primary hover:underline flex items-center gap-1 font-semibold focus:outline-none"
+                    >
+                      <RefreshCw className={`w-2.5 h-2.5 ${isFetchingPorts ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={startBleScan} 
+                      disabled={isScanning}
+                      className="text-[10px] text-primary hover:underline flex items-center gap-1 font-semibold focus:outline-none"
+                    >
+                      <RefreshCw className={`w-2.5 h-2.5 ${isScanning ? 'animate-spin' : ''}`} />
+                      Scan
+                    </button>
+                  )}
+                </div>
+
+                <Select value={target} onValueChange={setTarget}>
+                  <SelectTrigger className="w-full font-mono bg-background/50 h-9">
+                    <SelectValue placeholder={mode === 'serial' ? '-- Auto-detect --' : '-- Auto-detect / Scan --'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto-detect">-- Auto-detect --</SelectItem>
+                    {mode === 'serial' ? (
+                      serialPorts.map((p) => (
+                        <SelectItem key={p.port} value={p.port}>
+                          {p.port} {p.desc ? ` - ${p.desc}` : ''}
+                        </SelectItem>
+                      ))
+                    ) : (
+                      bleDevices.map((d) => (
+                        <SelectItem key={d.address} value={d.address}>
+                          {d.name} ({d.address})
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Manual Override */}
+              <div className="flex flex-col gap-1.5 w-full">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block h-4">Manual Override</label>
+                <Input
                   type="text"
                   value={target}
                   onChange={(e) => setTarget(e.target.value)}
                   placeholder="Manual Override"
-                  className="bg-[#11111b] text-xs px-3 py-2.5 rounded-lg border border-[#313244] focus:outline-none focus:border-[#cba6f7] transition-all font-mono placeholder:text-[#585b70] w-36 text-center"
+                  className="font-mono w-full h-9 bg-background/50"
                 />
               </div>
-            </div>
 
-            {/* Connect button */}
-            <div className="flex items-end">
-              <Button
-                onClick={handleConnect}
-                className="w-full flex items-center justify-center gap-2 font-bold"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Initialize Link
-              </Button>
-            </div>
+              {/* Connect button */}
+              <div className="w-full">
+                <Button
+                  onClick={handleConnect}
+                  className="w-full flex items-center justify-center gap-2 font-bold h-9"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Initialize Link
+                </Button>
+              </div>
 
-          </div>
+            </CardContent>
+          </Card>
 
           {/* Real-time graphs */}
           <div className="flex-1 grid grid-cols-1 gap-4 min-h-[500px]">
@@ -421,11 +431,11 @@ export default function App() {
           <div className="grid grid-cols-2 gap-4">
             
             {/* Heart Rate Display */}
-            <div className="flex flex-col items-center justify-center p-4 rounded-xl bg-[#181825]/60 border border-[#313244]/50 backdrop-blur-md text-center">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-[#a6adc8] mb-2">Heart Rate</span>
+            <Card className="flex flex-col items-center justify-center p-4 bg-card/60 backdrop-blur-md text-center border-border">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Heart Rate</span>
               <div className="relative mb-2">
                 <Heart 
-                  className={`w-12 h-12 text-[#f38ba8] ${bpm ? 'animate-heartbeat' : ''}`}
+                  className={`w-12 h-12 text-destructive ${bpm ? 'animate-heartbeat' : ''}`}
                   style={{
                     animationDuration: heartAnimDuration,
                     animationIterationCount: 'infinite',
@@ -433,77 +443,77 @@ export default function App() {
                   }}
                 />
               </div>
-              <span className="text-3xl font-black text-[#f38ba8] font-mono">
+              <span className="text-3xl font-black text-destructive font-mono">
                 {bpm ? Math.round(bpm) : '—'}
               </span>
-              <span className="text-[10px] text-[#a6adc8] font-semibold mt-1">BPM (spectral)</span>
-            </div>
+              <span className="text-[10px] text-muted-foreground font-semibold mt-1">BPM (spectral)</span>
+            </Card>
 
             {/* Skin Contact Indicator */}
-            <div className="flex flex-col items-center justify-center p-4 rounded-xl bg-[#181825]/60 border border-[#313244]/50 backdrop-blur-md text-center">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-[#a6adc8] mb-2">Wear Status</span>
+            <Card className="flex flex-col items-center justify-center p-4 bg-card/60 backdrop-blur-md text-center border-border">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Wear Status</span>
               <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-2 border ${
                 contact 
-                  ? 'bg-[#a6e3a1]/10 border-[#a6e3a1]/30 text-[#a6e3a1]' 
-                  : 'bg-[#f38ba8]/10 border-[#f38ba8]/30 text-[#f38ba8]'
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500' 
+                  : 'bg-destructive/10 border-destructive/30 text-destructive'
               }`}>
-                {contact ? <Wifi className="w-6 h-6 animate-pulse" /> : <WifiOff className="w-6 h-6" />}
+                <Fingerprint className={`w-6 h-6 ${contact ? 'animate-pulse' : ''}`} />
               </div>
-              <span className={`text-xl font-bold uppercase tracking-wide ${contact ? 'text-[#a6e3a1]' : 'text-[#f38ba8]'}`}>
+              <span className={`text-xl font-bold uppercase tracking-wide ${contact ? 'text-emerald-500' : 'text-destructive'}`}>
                 {contact ? 'WORN' : 'UNWORN'}
               </span>
-              <span className="text-[10px] text-[#a6adc8] font-semibold mt-2">Skin Contact</span>
-            </div>
+              <span className="text-[10px] text-muted-foreground font-semibold mt-2">Skin Contact</span>
+            </Card>
 
           </div>
 
           {/* Card: Sensor Details */}
-          <div className="p-4 rounded-xl bg-[#181825]/60 border border-[#313244]/50 backdrop-blur-md">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-[#a6adc8] mb-3 flex items-center gap-1.5">
-              <Cpu className="w-4 h-4 text-[#cba6f7]" />
+          <Card className="p-4 bg-card/60 backdrop-blur-md border border-border">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+              <Cpu className="w-4 h-4 text-primary" />
               Telemetry Details
             </h3>
             
             <div className="space-y-2.5 text-xs font-mono">
-              <div className="flex justify-between border-b border-[#313244]/55 pb-1.5">
-                <span className="text-[#a6adc8]">Accel X:</span>
-                <span className="text-[#cdd6f4]">{textValues.ax.toFixed(3)} m/s²</span>
+              <div className="flex justify-between border-b border-border pb-1.5">
+                <span className="text-muted-foreground">Accel X:</span>
+                <span className="text-foreground">{textValues.ax.toFixed(3)} m/s²</span>
               </div>
-              <div className="flex justify-between border-b border-[#313244]/55 pb-1.5">
-                <span className="text-[#a6adc8]">Accel Y:</span>
-                <span className="text-[#cdd6f4]">{textValues.ay.toFixed(3)} m/s²</span>
+              <div className="flex justify-between border-b border-border pb-1.5">
+                <span className="text-muted-foreground">Accel Y:</span>
+                <span className="text-foreground">{textValues.ay.toFixed(3)} m/s²</span>
               </div>
-              <div className="flex justify-between border-b border-[#313244]/55 pb-1.5">
-                <span className="text-[#a6adc8]">Accel Z:</span>
-                <span className="text-[#cdd6f4]">{textValues.az.toFixed(3)} m/s²</span>
+              <div className="flex justify-between border-b border-border pb-1.5">
+                <span className="text-muted-foreground">Accel Z:</span>
+                <span className="text-foreground">{textValues.az.toFixed(3)} m/s²</span>
               </div>
-              <div className="flex justify-between border-b border-[#313244]/55 pb-1.5">
-                <span className="text-[#a6adc8]">Gyro X:</span>
-                <span className="text-[#cdd6f4]">{textValues.gx.toFixed(3)} rad/s</span>
+              <div className="flex justify-between border-b border-border pb-1.5">
+                <span className="text-muted-foreground">Gyro X:</span>
+                <span className="text-foreground">{textValues.gx.toFixed(3)} rad/s</span>
               </div>
-              <div className="flex justify-between border-b border-[#313244]/55 pb-1.5">
-                <span className="text-[#a6adc8]">Gyro Y:</span>
-                <span className="text-[#cdd6f4]">{textValues.gy.toFixed(3)} rad/s</span>
+              <div className="flex justify-between border-b border-border pb-1.5">
+                <span className="text-muted-foreground">Gyro Y:</span>
+                <span className="text-foreground">{textValues.gy.toFixed(3)} rad/s</span>
               </div>
               <div className="flex justify-between pb-0.5">
-                <span className="text-[#a6adc8]">Gyro Z:</span>
-                <span className="text-[#cdd6f4]">{textValues.gz.toFixed(3)} rad/s</span>
+                <span className="text-muted-foreground">Gyro Z:</span>
+                <span className="text-foreground">{textValues.gz.toFixed(3)} rad/s</span>
               </div>
             </div>
-          </div>
+          </Card>
 
           {/* Console / Logs panel */}
-          <div className="flex-1 flex flex-col p-4 rounded-xl bg-[#181825]/60 border border-[#313244]/50 backdrop-blur-md overflow-hidden min-h-[180px]">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-[#a6adc8] mb-2">System Logs</span>
-            <div className="flex-1 bg-[#11111b] p-3 rounded-lg border border-[#313244] font-mono text-[10px] overflow-y-auto flex flex-col-reverse gap-1 text-[#a6adc8]">
+          <Card className="flex-1 flex flex-col p-4 bg-card/60 backdrop-blur-md overflow-hidden min-h-[180px] border border-border">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">System Logs</span>
+            <div className="flex-1 bg-background/50 p-3 rounded-lg border border-border font-mono text-[10px] overflow-y-auto flex flex-col-reverse gap-1 text-muted-foreground">
               {logs.map((log, i) => (
-                <div key={i} className="whitespace-pre-wrap leading-normal border-b border-[#181825] pb-0.5 last:border-b-0">
+                <div key={i} className="whitespace-pre-wrap leading-normal border-b border-border/30 pb-0.5 last:border-b-0">
                   {log}
                 </div>
               ))}
-              {logs.length === 0 && <div className="text-[#585b70] italic">No logs yet. Click Initialize Link.</div>}
+              {logs.length === 0 && <div className="text-muted-foreground/50 italic">No logs yet. Click Initialize Link.</div>}
             </div>
-          </div>
+          </Card>
 
         </div>
 
