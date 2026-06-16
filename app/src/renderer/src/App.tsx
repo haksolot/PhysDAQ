@@ -722,7 +722,7 @@ export default function App() {
           </div>
 
           {/* RIGHT COLUMN: 3D Board & Node Details */}
-          <div className="w-full lg:w-[380px] flex flex-col gap-4">
+          <div className="w-full lg:w-[380px] flex flex-col gap-4 lg:overflow-y-auto pr-1">
             
             {/* 3D Board Orientation Mesh */}
             <div className="h-[340px] flex-shrink-0">
@@ -844,7 +844,7 @@ export default function App() {
           <Card className="w-full md:w-[380px] p-4 bg-card/60 backdrop-blur-md border border-border flex flex-col overflow-hidden min-h-[350px] md:min-h-0">
             <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block mb-3">Saved Session Folders</span>
             
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            <div className="flex-1 overflow-y-auto flex flex-col gap-3.5 pr-1">
               {recordingsList.map((rec) => (
                 <div
                   key={rec.path}
