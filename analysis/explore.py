@@ -87,7 +87,7 @@ def new_plot(glw, row, title, y_label, ref=None, last=False):
     p.showGrid(x=True, y=True, alpha=0.2)
     p.setLabel("left", y_label)
     if last:
-        p.setLabel("bottom", "temps (s)")
+        p.setLabel("bottom", "time (s)")
     else:
         p.hideAxis("bottom")
     if ref is not None:
@@ -134,13 +134,13 @@ def main():
 
     print(f"Loaded : {label}  ({N} samples, {duration:.1f} s)")
     if has_enriched:
-        print("  Colonnes enrichies détectées (PPG filtré, orientation, motion)")
+        print("  Enriched columns detected (filtered PPG, orientation, motion)")
     if has_contact and not df["contact"].any():
-        print("  ATTENTION : aucun contact peau détecté sur tout l'enregistrement")
+        print("  WARNING: no skin contact detected in the entire recording")
     if has_beats:
-        print(f"  Fichier beats : {len(beats_df)} battements")
+        print(f"  Beats file: {len(beats_df)} beats")
     if has_spectral:
-        print(f"  Piste BPM spectrale : {len(spectral_df)} fenêtres")
+        print(f"  Spectral BPM track: {len(spectral_df)} windows")
 
     app = QtWidgets.QApplication(sys.argv)
     pg.setConfigOptions(antialias=True, background="#1e1e2e", foreground="#cdd6f4")
@@ -154,7 +154,7 @@ def main():
     root.setSpacing(4)
 
     # Info bar
-    beats_info = f"  |   {len(beats_df)} battements" if has_beats else ""
+    beats_info = f"  |   {len(beats_df)} beats" if has_beats else ""
     info = QtWidgets.QLabel(
         f"  {label}   |   {N} samples   |   {duration:.1f} s"
         f"   |   {'enriched' if has_enriched else 'raw'}{beats_info}"
@@ -184,7 +184,7 @@ def main():
 
         # ── PPG Raw ────────────────────────────────────────────────────────
         if panel == "ppg_raw":
-            p = new_plot(glw, row, "PPG — brut (ADC 18-bit)", "ADC counts",
+            p = new_plot(glw, row, "PPG — raw (ADC 18-bit)", "ADC counts",
                          ref, last=is_last)
             ref = p
             leg = p.addLegend(offset=(10, 10))
@@ -196,15 +196,15 @@ def main():
                 shade_regions(p, t, 1 - df["contact"].to_numpy(),
                               pg.mkBrush(140, 140, 140, 60))
 
-        # ── PPG Filtré + marqueurs battements ──────────────────────────────
+        # ── PPG Filtered + beat markers ──────────────────────────────
         elif panel == "ppg_filt":
-            p = new_plot(glw, row, "PPG — filtré 0.5–8 Hz", "ADC counts",
+            p = new_plot(glw, row, "PPG — filtered 0.5–8 Hz", "ADC counts",
                          ref, last=is_last)
             p.addLegend(offset=(10, 10))
             p.plot(t, df["red_filt"].to_numpy(),
-                   pen=pg.mkPen(COLORS["red"], width=1.5), name="Red filtré")
+                   pen=pg.mkPen(COLORS["red"], width=1.5), name="Red filtered")
             p.plot(t, df["ir_filt"].to_numpy(),
-                   pen=pg.mkPen(COLORS["ir"],  width=1.5), name="IR filtré")
+                   pen=pg.mkPen(COLORS["ir"],  width=1.5), name="IR filtered")
             if has_beats:
                 for bt in beats_df["beat_time"].dropna().to_numpy():
                     p.addItem(pg.InfiniteLine(
@@ -215,7 +215,7 @@ def main():
 
         # ── BPM + RMSSD ────────────────────────────────────────────────────
         elif panel == "bpm":
-            p = new_plot(glw, row, "BPM  +  RMSSD HRV (ms)", "valeur",
+            p = new_plot(glw, row, "BPM  +  RMSSD HRV (ms)", "value",
                          ref, last=is_last)
             p.addLegend(offset=(10, 10))
             if has_spectral:
@@ -231,7 +231,7 @@ def main():
                 p.plot(bt, bpm_vals, pen=None,
                        symbol="o", symbolSize=7,
                        symbolBrush=COLORS["bpm"], symbolPen=None,
-                       name="BPM (battement)")
+                       name="BPM (beat)")
                 if "rmssd_ms" in beats_df.columns:
                     rmssd = beats_df["rmssd_ms"].to_numpy().astype(float)
                     mask  = ~np.isnan(rmssd)
@@ -251,7 +251,7 @@ def main():
 
         # ── Orientation ────────────────────────────────────────────────────
         elif panel == "orientation":
-            p = new_plot(glw, row, "Orientation Madgwick (°)", "degrés",
+            p = new_plot(glw, row, "Orientation Madgwick (°)", "degrees",
                          ref, last=is_last)
             p.addLegend(offset=(10, 10))
             p.plot(t, df["roll_deg"].to_numpy(),
@@ -261,13 +261,13 @@ def main():
             p.plot(t, df["yaw_deg"].to_numpy(),
                    pen=pg.mkPen(COLORS["yaw"],   width=1.5), name="Yaw")
 
-        # ── Motion / activité ──────────────────────────────────────────────
+        # ── Motion / activity ──────────────────────────────────────────────
         elif panel == "motion":
-            p = new_plot(glw, row, "Activité — |accel dynamique|", "g",
+            p = new_plot(glw, row, "Activity — |dynamic accel|", "g",
                          ref, last=is_last)
             p.addLegend(offset=(10, 10))
             p.plot(t, df["accel_mag_g"].to_numpy(),
-                   pen=pg.mkPen(COLORS["mag"], width=1.5), name="|accel dyn| (g)")
+                   pen=pg.mkPen(COLORS["mag"], width=1.5), name="|dyn accel| (g)")
             shade_regions(p, t, df["motion"].to_numpy(), pg.mkBrush(255, 80, 80, 45))
 
         row += 1

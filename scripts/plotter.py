@@ -502,17 +502,17 @@ def main():
     gyro_plot = pg.PlotWidget(title="Gyroscope (rad/s)")
     gyro_plot.showGrid(x=True, y=True, alpha=0.2)
     gyro_plot.setLabel("left", "rad/s")
-    gyro_plot.setLabel("bottom", f"derniers {WINDOW} échantillons  (@{SAMPLE_RATE} Hz = {WINDOW//SAMPLE_RATE}s)")
+    gyro_plot.setLabel("bottom", f"last {WINDOW} samples  (@{SAMPLE_RATE} Hz = {WINDOW//SAMPLE_RATE}s)")
     gyro_plot.addLegend(offset=(10, 10))
     c_gx = gyro_plot.plot(xs, list(gx_buf), pen=pg.mkPen("#f38ba8", width=2), name="GX")
     c_gy = gyro_plot.plot(xs, list(gy_buf), pen=pg.mkPen("#a6e3a1", width=2), name="GY")
     c_gz = gyro_plot.plot(xs, list(gz_buf), pen=pg.mkPen("#89b4fa", width=2), name="GZ")
     left_layout.addWidget(gyro_plot, stretch=1)
 
-    ppg_plot = pg.PlotWidget(title="PPG — brut 18-bit (pose le doigt sur le capteur)")
+    ppg_plot = pg.PlotWidget(title="PPG — raw 18-bit (place finger on the sensor)")
     ppg_plot.showGrid(x=True, y=True, alpha=0.2)
     ppg_plot.setLabel("left", "ADC counts")
-    ppg_plot.setLabel("bottom", f"derniers {WINDOW} échantillons  (@{SAMPLE_RATE} Hz = {WINDOW//SAMPLE_RATE}s)")
+    ppg_plot.setLabel("bottom", f"last {WINDOW} samples  (@{SAMPLE_RATE} Hz = {WINDOW//SAMPLE_RATE}s)")
     ppg_plot.addLegend(offset=(10, 10))
     c_red = ppg_plot.plot(xs, list(red_buf), pen=pg.mkPen("#f38ba8", width=2), name="Red")
     c_ir  = ppg_plot.plot(xs, list(ir_buf),  pen=pg.mkPen("#cba6f7", width=2), name="IR")
@@ -520,10 +520,10 @@ def main():
 
     # Dedicated filtered plot — own y-axis so the AC signal fills the space.
     # Bandpass 0.5-8 Hz preserves 6+ cardiac harmonics → proper pulse shape.
-    filt_plot = pg.PlotWidget(title="PPG filtré (0.5–8 Hz) — BPM: —")
+    filt_plot = pg.PlotWidget(title="Filtered PPG (0.5–8 Hz) — BPM: —")
     filt_plot.showGrid(x=True, y=True, alpha=0.2)
     filt_plot.setLabel("left", "AC (u.a.)")
-    filt_plot.setLabel("bottom", f"derniers {WINDOW} échantillons  (@{SAMPLE_RATE} Hz = {WINDOW//SAMPLE_RATE}s)")
+    filt_plot.setLabel("bottom", f"last {WINDOW} samples  (@{SAMPLE_RATE} Hz = {WINDOW//SAMPLE_RATE}s)")
     filt_plot.addLegend(offset=(10, 10))
     filt_plot.setXLink(ppg_plot)        # sync zoom/pan with raw PPG
     c_ir_filt  = filt_plot.plot(xs, np.zeros(WINDOW), pen=pg.mkPen("#89dceb", width=2), name="IR")
@@ -585,12 +585,12 @@ def main():
             # Decoupled from ir_filt (0.5-8 Hz, used only for waveform display).
             raw_bpm = rt_bpm_raw(np.array(ir_bpm_buf))
             bpm     = rt_bpm_smoothed(raw_bpm, bpm_state)
-            filt_plot.setTitle(f"PPG filtré (0.5–8 Hz) — BPM: {bpm:.0f}" if bpm
-                               else "PPG filtré (0.5–8 Hz) — BPM: —")
+            filt_plot.setTitle(f"Filtered PPG (0.5–8 Hz) — BPM: {bpm:.0f}" if bpm
+                               else "Filtered PPG (0.5–8 Hz) — BPM: —")
         else:
             bpm_state["value"] = None
             bpm_state["lost"]  = 0
-            filt_plot.setTitle("PPG filtré (0.5–8 Hz) — pas de contact peau")
+            filt_plot.setTitle("Filtered PPG (0.5–8 Hz) — no skin contact")
 
         with ahrs_lock:
             q = current_quat.copy()

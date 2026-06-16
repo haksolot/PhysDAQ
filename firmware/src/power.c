@@ -104,13 +104,13 @@ void power_update(const struct sensor_value gyro[3])
 	}
 
 	/* Periodic status line so you can watch the countdown in 'make term'.
-	 * Format:  Power: idle Xs/10s | peau: oui (dc=29050) | peak ~Xmrad/s (thresh 100mrad/s) */
+	 * Format:  Power: idle Xs/10s | skin: yes (dc=29050) | peak ~Xmrad/s (thresh 100mrad/s) */
 	if (now - last_status_ms >= STATUS_INTERVAL_MS) {
 		int32_t idle_s = (int32_t)((now - last_active_ms) / 1000);
 		struct contact_debug dbg;
 		contact_get_debug(&dbg);
-		printk("Power: idle %ds/%ds | peau: %s (dc=%d) | peak ~%dmrad/s (thresh %dmrad/s)\n",
-		       idle_s, CONFIG_MAID_IDLE_TIMEOUT_SEC, skin ? "oui" : "non",
+		printk("Power: idle %ds/%ds | skin: %s (dc=%d) | peak ~%dmrad/s (thresh %dmrad/s)\n",
+		       idle_s, CONFIG_MAID_IDLE_TIMEOUT_SEC, skin ? "yes" : "no",
 		       (int)dbg.dc, peak_mrad, MOTION_THRESH_MRAD);
 		last_status_ms = now;
 		peak_mrad      = 0;
