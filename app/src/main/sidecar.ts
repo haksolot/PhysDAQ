@@ -1,13 +1,29 @@
 import { spawn, exec, ChildProcess } from 'child_process'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { is } from '@electron-toolkit/utils'
+
+function getPythonCommand(): string {
+  if (is.dev) {
+    const repoRoot = join(__dirname, '../../..')
+    const winVenvPython = join(repoRoot, '.venv/Scripts/python.exe')
+    const unixVenvPython = join(repoRoot, '.venv/bin/python')
+
+    if (process.platform === 'win32' && existsSync(winVenvPython)) {
+      return winVenvPython
+    } else if (process.platform !== 'win32' && existsSync(unixVenvPython)) {
+      return unixVenvPython
+    }
+  }
+  return 'python'
+}
 
 let sidecarProcess: ChildProcess | null = null
 
 export function startSidecar(mainWindow: BrowserWindow): void {
   // Determine command and args depending on dev/prod mode
-  let command = 'python'
+  let command = getPythonCommand()
   let args: string[] = []
 
   if (is.dev) {
@@ -71,6 +87,7 @@ export function startSidecar(mainWindow: BrowserWindow): void {
     stopSidecar()
     
     // Reconfigure args
+    let command = getPythonCommand()
     if (is.dev) {
       const bridgePath = join(__dirname, '../../../scripts/bridge.py')
       args = [bridgePath]
@@ -152,7 +169,7 @@ app.on('will-quit', () => {
 
 export function getSerialPorts(): Promise<any[]> {
   return new Promise((resolve) => {
-    let command = 'python'
+    let command = getPythonCommand()
     let args = [join(__dirname, '../../../scripts/bridge.py'), '--list-ports']
 
     if (!is.dev) {
@@ -179,7 +196,7 @@ export function getSerialPorts(): Promise<any[]> {
 
 export function scanBle(): Promise<any[]> {
   return new Promise((resolve) => {
-    let command = 'python'
+    let command = getPythonCommand()
     let args = [join(__dirname, '../../../scripts/bridge.py'), '--scan']
 
     if (!is.dev) {
