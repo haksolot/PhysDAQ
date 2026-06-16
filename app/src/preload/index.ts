@@ -10,25 +10,33 @@ const api = {
       ipcRenderer.removeListener('sensor-data', subscription)
     }
   },
-  onSidecarLog: (callback: (log: string) => void) => {
-    const subscription = (_event: any, log: string) => callback(log)
+  onSidecarLog: (callback: (log: any) => void) => {
+    const subscription = (_event: any, log: any) => callback(log)
     ipcRenderer.on('sidecar-log', subscription)
     return () => {
       ipcRenderer.removeListener('sidecar-log', subscription)
     }
   },
-  onSidecarStatus: (callback: (status: any) => void) => {
+  onSensorStatus: (callback: (status: any) => void) => {
     const subscription = (_event: any, status: any) => callback(status)
-    ipcRenderer.on('sidecar-status', subscription)
+    ipcRenderer.on('sensor-status', subscription)
     return () => {
-      ipcRenderer.removeListener('sidecar-status', subscription)
+      ipcRenderer.removeListener('sensor-status', subscription)
     }
   },
-  restartSidecar: (config: { mode: 'serial' | 'ble'; portOrAddr?: string }) => {
-    ipcRenderer.send('restart-sidecar', config)
+  connectSensor: (config: { id: string; mode: 'serial' | 'ble'; target: string; position: string }) => {
+    ipcRenderer.send('connect-sensor', config)
+  },
+  disconnectSensor: (id: string) => {
+    ipcRenderer.send('disconnect-sensor', id)
   },
   getSerialPorts: () => ipcRenderer.invoke('get-serial-ports'),
-  scanBle: () => ipcRenderer.invoke('scan-ble')
+  scanBle: () => ipcRenderer.invoke('scan-ble'),
+  startRecording: (sessionName: string) => ipcRenderer.invoke('start-recording', sessionName),
+  stopRecording: () => ipcRenderer.invoke('stop-recording'),
+  getRecordings: () => ipcRenderer.invoke('get-recordings'),
+  getRecordingData: (sessionPath: string, filename: string) => ipcRenderer.invoke('get-recording-data', sessionPath, filename),
+  deleteRecording: (sessionPath: string) => ipcRenderer.invoke('delete-recording', sessionPath)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
