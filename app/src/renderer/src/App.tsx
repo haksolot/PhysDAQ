@@ -32,7 +32,12 @@ import {
   RefreshCw,
   FileText,
   Trash2,
-  ArrowLeft
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw
 } from 'lucide-react'
 
 interface SensorNode {
@@ -489,6 +494,25 @@ export default function App() {
     }
   }, [])
 
+  const formatTimeOfDay = (isoString: string) => {
+    if (!isoString) return ''
+    try {
+      const date = new Date(isoString)
+      if (isNaN(date.getTime())) return ''
+      return date.toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    } catch (e) {
+      return ''
+    }
+  }
+
+  const getTimeAtPercent = (pct: number) => {
+    if (recordingData.length === 0) return ''
+    const idx = Math.max(0, Math.min(recordingData.length - 1, Math.floor((pct / 100) * (recordingData.length - 1))))
+    const sample = recordingData[idx]
+    if (!sample) return ''
+    return formatTimeOfDay(sample.timestamp) || `${Math.floor(sample.elapsed)}s`
+  }
+
   const getTimelineSparklinePoints = () => {
     if (recordingData.length === 0) return ''
     const sparkData = downsample(recordingData, 150)
@@ -588,7 +612,10 @@ export default function App() {
               
               <div className="text-[10px] font-mono text-muted-foreground">
                 {isRecording ? (
-                  <span className="text-emerald-500 font-bold animate-pulse">● RECORDING ONGOING ACROSS CONNECTED NODES</span>
+                  <span className="text-emerald-500 font-bold animate-pulse flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    RECORDING ONGOING ACROSS CONNECTED NODES
+                  </span>
                 ) : (
                   <span>Ready. Recorded CSV files save to Documents/MAID_Sessions</span>
                 )}
@@ -1057,7 +1084,7 @@ export default function App() {
                         <div className="flex justify-between items-center text-xs">
                           <span className="font-bold text-muted-foreground uppercase tracking-wider text-[9px]">Timeline Range Zoom</span>
                           <span className="font-mono text-primary font-bold">
-                            {sessionRange[0]}% - {sessionRange[1]}%
+                            {getTimeAtPercent(sessionRange[0]) || `${sessionRange[0]}%`} - {getTimeAtPercent(sessionRange[1]) || `${sessionRange[1]}%`}
                             {` (${Math.round((sessionRange[0] / 100) * recordingData.length)} to ${Math.round((sessionRange[1] / 100) * recordingData.length)} of ${recordingData.length} samples)`}
                           </span>
                         </div>
@@ -1092,12 +1119,12 @@ export default function App() {
                             </div>
 
                             {/* Time markings inside track */}
-                            <div className="absolute inset-x-0 bottom-0.5 flex justify-between px-2 text-[7px] font-mono text-muted-foreground/40 pointer-events-none select-none">
-                              <span>0% (START)</span>
-                              <span>25%</span>
-                              <span>50%</span>
-                              <span>75%</span>
-                              <span>100% (END)</span>
+                            <div className="absolute inset-x-0 bottom-0.5 flex justify-between px-2 text-[7px] font-mono text-muted-foreground/50 pointer-events-none select-none">
+                              <span>{getTimeAtPercent(0)}</span>
+                              <span>{getTimeAtPercent(25)}</span>
+                              <span>{getTimeAtPercent(50)}</span>
+                              <span>{getTimeAtPercent(75)}</span>
+                              <span>{getTimeAtPercent(100)}</span>
                             </div>
                           </div>
                           <span className="text-[8px] text-muted-foreground/60 mt-1 block text-center font-mono">
@@ -1114,20 +1141,22 @@ export default function App() {
                               size="xs"
                               onClick={handlePanLeft}
                               disabled={sessionRange[0] === 0}
-                              className="text-[10px] h-7 px-2 font-bold font-mono"
+                              className="text-[10px] h-7 px-2 font-bold font-mono gap-1"
                               title="Pan Left"
                             >
-                              ◀ Scroll Left
+                              <ChevronLeft className="w-3.5 h-3.5" />
+                              Scroll Left
                             </Button>
                             <Button
                               variant="outline"
                               size="xs"
                               onClick={handlePanRight}
                               disabled={sessionRange[1] === 100}
-                              className="text-[10px] h-7 px-2 font-bold font-mono"
+                              className="text-[10px] h-7 px-2 font-bold font-mono gap-1"
                               title="Pan Right"
                             >
-                              Scroll Right ▶
+                              Scroll Right
+                              <ChevronRight className="w-3.5 h-3.5" />
                             </Button>
                             <span className="h-7 w-px bg-border/60 mx-1" />
                             <Button
@@ -1135,20 +1164,22 @@ export default function App() {
                               size="xs"
                               onClick={handleZoomIn}
                               disabled={sessionRange[1] - sessionRange[0] <= 5}
-                              className="text-[10px] h-7 px-2 font-bold font-mono"
+                              className="text-[10px] h-7 px-2 font-bold font-mono gap-1"
                               title="Zoom In"
                             >
-                              🔍 Zoom In (+)
+                              <ZoomIn className="w-3.5 h-3.5" />
+                              Zoom In (+)
                             </Button>
                             <Button
                               variant="outline"
                               size="xs"
                               onClick={handleZoomOut}
                               disabled={sessionRange[0] === 0 && sessionRange[1] === 100}
-                              className="text-[10px] h-7 px-2 font-bold font-mono"
+                              className="text-[10px] h-7 px-2 font-bold font-mono gap-1"
                               title="Zoom Out"
                             >
-                              Zoom Out (-) 🔎
+                              <ZoomOut className="w-3.5 h-3.5" />
+                              Zoom Out (-)
                             </Button>
                           </div>
 
@@ -1190,8 +1221,9 @@ export default function App() {
                               variant="ghost"
                               size="xs"
                               onClick={() => setSessionRange([0, 100])}
-                              className="text-[10px] h-7 px-2 font-bold text-muted-foreground hover:text-foreground"
+                              className="text-[10px] h-7 px-2 font-bold text-muted-foreground hover:text-foreground gap-1"
                             >
+                              <RotateCcw className="w-3.5 h-3.5" />
                               Reset View
                             </Button>
                           </div>

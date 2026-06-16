@@ -343,11 +343,31 @@ export function startSidecar(mainWindow: BrowserWindow): void {
         contact: headers.indexOf('contact')
       }
 
+      let dc = 0
+      let lp = 0
+      let isFirst = true
+
       for (let i = 1; i < lines.length; i++) {
         const line = lines[i].trim()
         if (!line) continue
         const cols = line.split(',')
         if (cols.length < 10) continue
+
+        const irVal = idx.ir !== -1 ? parseFloat(cols[idx.ir]) : 0
+        let ppgFiltVal = idx.ppg_filt !== -1 ? parseFloat(cols[idx.ppg_filt]) : 0
+
+        if (idx.ppg_filt === -1 && idx.ir !== -1) {
+          if (isFirst) {
+            dc = irVal
+            lp = 0
+            isFirst = false
+          } else {
+            dc = dc * 0.985 + irVal * 0.015
+            const ac = irVal - dc
+            lp = lp * 0.75 + ac * 0.25
+          }
+          ppgFiltVal = lp
+        }
 
         data.push({
           timestamp: idx.timestamp !== -1 ? cols[idx.timestamp] : '',
@@ -363,8 +383,8 @@ export function startSidecar(mainWindow: BrowserWindow): void {
           qy: idx.qy !== -1 ? parseFloat(cols[idx.qy]) : 0,
           qz: idx.qz !== -1 ? parseFloat(cols[idx.qz]) : 0,
           red: idx.red !== -1 ? parseFloat(cols[idx.red]) : 0,
-          ir: idx.ir !== -1 ? parseFloat(cols[idx.ir]) : 0,
-          ppg_filt: idx.ppg_filt !== -1 ? parseFloat(cols[idx.ppg_filt]) : 0,
+          ir: irVal,
+          ppg_filt: ppgFiltVal,
           bpm: (idx.bpm !== -1 && cols[idx.bpm]) ? parseFloat(cols[idx.bpm]) : null,
           contact: idx.contact !== -1 ? cols[idx.contact] === '1' : false
         })

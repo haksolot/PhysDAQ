@@ -168,6 +168,7 @@ def rt_bpm_smoothed(raw_bpm, state):
 # State variables
 ir_bpm_buf = collections.deque(maxlen=BPM_WINDOW_N)
 bpm_state = {"value": None, "lost": 0}
+ppg_filter_state = {"dc": None, "lp": None}
 
 ahrs = imufusion.Ahrs()
 try:
@@ -191,7 +192,7 @@ current_quat = [1.0, 0.0, 0.0, 0.0]
 BATT_PATTERN = re.compile(r'Battery:\s+(\d+)%\s+\((\d+)\s+mV\)')
 
 def process_sample(line: str) -> None:
-    global _still_count, _was_still, _last_t, current_quat
+    global _still_count, _was_still, _last_t, current_quat, ppg_filter_state
     
     # Check for battery line
     bm = BATT_PATTERN.search(line)
@@ -253,14 +254,18 @@ def process_sample(line: str) -> None:
         bpm_state["value"] = None
         bpm_state["lost"] = 0
 
-    # Filtered PPG value (BPM AC Waveform)
-    ppg_filt = 0.0
-    if len(ir_bpm_buf) >= 15 and _SCIPY_OK:
-        try:
-            filt_arr = sosfiltfilt(_BPM_BP_SOS, list(ir_bpm_buf))
-            ppg_filt = float(filt_arr[-1])
-        except Exception:
-            pass
+    # Filtered PPG value (BPM AC Waveform) - Pure Python sample-by-sample EMA bandpass filter
+    if ppg_filter_state["dc"] is None:
+        ppg_filter_state["dc"] = ir
+        ppg_filter_state["lp"] = 0.0
+
+    # DC baseline estimate (high-pass filter)
+    ppg_filter_state["dc"] = ppg_filter_state["dc"] * 0.985 + ir * 0.015
+    ac_raw = ir - ppg_filter_state["dc"]
+
+    # Low-pass filter (remove high-frequency noise)
+    ppg_filter_state["lp"] = ppg_filter_state["lp"] * 0.75 + ac_raw * 0.25
+    ppg_filt = ppg_filter_state["lp"]
 
     # Output JSON sample to stdout
     output = {
