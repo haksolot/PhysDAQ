@@ -371,6 +371,143 @@ export default function App() {
   }
 
   const currentSubset = getSelectedDataSubset()
+
+  // Timeline Zoom and Pan functions
+  const handleZoomIn = () => {
+    const start = sessionRange[0]
+    const end = sessionRange[1]
+    const center = (start + end) / 2
+    const newWidth = Math.max(5, (end - start) * 0.7)
+    const newStart = Math.max(0, Math.round(center - newWidth / 2))
+    const newEnd = Math.min(100, Math.round(center + newWidth / 2))
+    setSessionRange([newStart, newEnd])
+  }
+
+  const handleZoomOut = () => {
+    const start = sessionRange[0]
+    const end = sessionRange[1]
+    const center = (start + end) / 2
+    const newWidth = Math.min(100, (end - start) * 1.3)
+    const newStart = Math.max(0, Math.round(center - newWidth / 2))
+    const newEnd = Math.min(100, Math.round(center + newWidth / 2))
+    let finalStart = newStart
+    let finalEnd = newEnd
+    if (finalStart === 0) {
+      finalEnd = Math.min(100, Math.round(newWidth))
+    } else if (finalEnd === 100) {
+      finalStart = Math.max(0, 100 - Math.round(newWidth))
+    }
+    setSessionRange([finalStart, finalEnd])
+  }
+
+  const handlePanLeft = () => {
+    const start = sessionRange[0]
+    const end = sessionRange[1]
+    const width = end - start
+    const shift = Math.max(5, Math.round(width * 0.2))
+    const newStart = Math.max(0, start - shift)
+    const newEnd = newStart + width
+    setSessionRange([newStart, newEnd])
+  }
+
+  const handlePanRight = () => {
+    const start = sessionRange[0]
+    const end = sessionRange[1]
+    const width = end - start
+    const shift = Math.max(5, Math.round(width * 0.2))
+    const newEnd = Math.min(100, end + shift)
+    const newStart = newEnd - width
+    setSessionRange([newStart, newEnd])
+  }
+
+  const timelineRef = useRef<HTMLDivElement | null>(null)
+  const isDraggingTimeline = useRef<'pan' | 'none'>('none')
+  const dragStartPct = useRef<number>(0)
+  const dragStartRange = useRef<[number, number]>([0, 100])
+
+  const handleTimelineMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!timelineRef.current) return
+    const rect = timelineRef.current.getBoundingClientRect()
+    const clickX = e.clientX - rect.left
+    const clickPct = (clickX / rect.width) * 100
+
+    const start = sessionRange[0]
+    const end = sessionRange[1]
+
+    if (clickPct >= start && clickPct <= end) {
+      isDraggingTimeline.current = 'pan'
+      dragStartPct.current = clickPct
+      dragStartRange.current = [...sessionRange]
+    } else {
+      const width = end - start
+      let newStart = Math.max(0, Math.round(clickPct - width / 2))
+      let newEnd = newStart + width
+      if (newEnd > 100) {
+        newEnd = 100
+        newStart = 100 - width
+      }
+      setSessionRange([newStart, newEnd])
+      
+      isDraggingTimeline.current = 'pan'
+      dragStartPct.current = clickPct
+      dragStartRange.current = [newStart, newEnd]
+    }
+  }
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingTimeline.current === 'pan' && timelineRef.current) {
+        const rect = timelineRef.current.getBoundingClientRect()
+        const currentX = e.clientX - rect.left
+        const currentPct = (currentX / rect.width) * 100
+        const diff = currentPct - dragStartPct.current
+
+        const startRange = dragStartRange.current
+        const width = startRange[1] - startRange[0]
+
+        let newStart = Math.max(0, Math.round(startRange[0] + diff))
+        let newEnd = newStart + width
+
+        if (newEnd > 100) {
+          newEnd = 100
+          newStart = 100 - width
+        }
+
+        setSessionRange([newStart, newEnd])
+      }
+    }
+
+    const handleMouseUp = () => {
+      isDraggingTimeline.current = 'none'
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [])
+
+  const getTimelineSparklinePoints = () => {
+    if (recordingData.length === 0) return ''
+    const sparkData = downsample(recordingData, 150)
+    let minVal = sparkData[0]?.ppg_filt ?? sparkData[0]?.ir ?? 0
+    let maxVal = minVal
+    sparkData.forEach((d) => {
+      const v = d.ppg_filt ?? d.ir ?? 0
+      if (v < minVal) minVal = v
+      if (v > maxVal) maxVal = v
+    })
+    const range = maxVal - minVal || 1
+    
+    return sparkData.map((d, i) => {
+      const v = d.ppg_filt ?? d.ir ?? 0
+      const x = (i / (sparkData.length - 1)) * 100
+      const y = 20 - ((v - minVal) / range) * 16
+      return `${x},${y}`
+    }).join(' ')
+  }
   staticPpgFiltRef.current = downsample(currentSubset)
   staticPpgRef.current = downsample(currentSubset)
   staticImuRef.current = downsample(currentSubset)
@@ -916,7 +1053,7 @@ export default function App() {
                   recordingData.length > 0 ? (
                     <div className="flex-1 flex flex-col gap-4 overflow-y-auto pr-1">
                       {/* Timeline range selector */}
-                      <Card className="p-3 bg-muted/20 border border-border/60 flex flex-col gap-2 rounded-xl flex-shrink-0">
+                      <Card className="p-3 bg-muted/20 border border-border/60 flex flex-col gap-3 rounded-xl flex-shrink-0">
                         <div className="flex justify-between items-center text-xs">
                           <span className="font-bold text-muted-foreground uppercase tracking-wider text-[9px]">Timeline Range Zoom</span>
                           <span className="font-mono text-primary font-bold">
@@ -925,39 +1062,137 @@ export default function App() {
                           </span>
                         </div>
                         
-                        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
-                          <div className="md:col-span-5 flex gap-2 items-center">
-                            <span className="text-[10px] text-muted-foreground font-semibold uppercase w-10">Start</span>
-                            <input
-                              type="range"
-                              min="0"
-                              max={Math.min(99, sessionRange[1] - 1)}
-                              value={sessionRange[0]}
-                              onChange={(e) => setSessionRange([parseInt(e.target.value), sessionRange[1]])}
-                              className="w-full h-1.5 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary focus:outline-none"
-                            />
-                          </div>
-                          
-                          <div className="md:col-span-5 flex gap-2 items-center">
-                            <span className="text-[10px] text-muted-foreground font-semibold uppercase w-10">End</span>
-                            <input
-                              type="range"
-                              min={Math.max(1, sessionRange[0] + 1)}
-                              max="100"
-                              value={sessionRange[1]}
-                              onChange={(e) => setSessionRange([sessionRange[0], parseInt(e.target.value)])}
-                              className="w-full h-1.5 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary focus:outline-none"
-                            />
-                          </div>
+                        {/* Interactive Drag Scrubber Track */}
+                        <div className="relative">
+                          <div
+                            ref={timelineRef}
+                            onMouseDown={handleTimelineMouseDown}
+                            className="relative w-full h-8 bg-background/60 border border-border rounded-lg overflow-hidden cursor-ew-resize select-none flex items-center"
+                          >
+                            {/* Tiny Waveform Preview behind track */}
+                            <svg className="absolute inset-0 w-full h-full text-primary/10 fill-none" viewBox="0 0 100 20" preserveAspectRatio="none">
+                              <polyline
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="0.8"
+                                points={getTimelineSparklinePoints()}
+                              />
+                            </svg>
 
-                          <div className="md:col-span-2 flex justify-end">
+                            {/* Viewport box */}
+                            <div
+                              className="absolute h-full bg-primary/15 border-l-2 border-r-2 border-primary backdrop-blur-[0.5px] transition-shadow flex items-center justify-between px-1"
+                              style={{
+                                left: `${sessionRange[0]}%`,
+                                width: `${sessionRange[1] - sessionRange[0]}%`
+                              }}
+                            >
+                              <div className="w-0.5 h-3 bg-primary/50 rounded-sm" />
+                              <div className="w-0.5 h-3 bg-primary/50 rounded-sm" />
+                            </div>
+
+                            {/* Time markings inside track */}
+                            <div className="absolute inset-x-0 bottom-0.5 flex justify-between px-2 text-[7px] font-mono text-muted-foreground/40 pointer-events-none select-none">
+                              <span>0% (START)</span>
+                              <span>25%</span>
+                              <span>50%</span>
+                              <span>75%</span>
+                              <span>100% (END)</span>
+                            </div>
+                          </div>
+                          <span className="text-[8px] text-muted-foreground/60 mt-1 block text-center font-mono">
+                            CLICK OR DRAG VIEWPORT TO PAN/SCROLL THROUGH TIMELINE
+                          </span>
+                        </div>
+
+                        {/* Timeline controls bar */}
+                        <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-border/40">
+                          {/* Zoom and Scroll Buttons */}
+                          <div className="flex gap-1.5">
                             <Button
                               variant="outline"
                               size="xs"
-                              onClick={() => setSessionRange([0, 100])}
-                              className="text-[10px] h-7 px-2 font-bold w-full md:w-auto"
+                              onClick={handlePanLeft}
+                              disabled={sessionRange[0] === 0}
+                              className="text-[10px] h-7 px-2 font-bold font-mono"
+                              title="Pan Left"
                             >
-                              Reset
+                              ◀ Scroll Left
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              onClick={handlePanRight}
+                              disabled={sessionRange[1] === 100}
+                              className="text-[10px] h-7 px-2 font-bold font-mono"
+                              title="Pan Right"
+                            >
+                              Scroll Right ▶
+                            </Button>
+                            <span className="h-7 w-px bg-border/60 mx-1" />
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              onClick={handleZoomIn}
+                              disabled={sessionRange[1] - sessionRange[0] <= 5}
+                              className="text-[10px] h-7 px-2 font-bold font-mono"
+                              title="Zoom In"
+                            >
+                              🔍 Zoom In (+)
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              onClick={handleZoomOut}
+                              disabled={sessionRange[0] === 0 && sessionRange[1] === 100}
+                              className="text-[10px] h-7 px-2 font-bold font-mono"
+                              title="Zoom Out"
+                            >
+                              Zoom Out (-) 🔎
+                            </Button>
+                          </div>
+
+                          {/* Fallback fine-grained control sliders */}
+                          <div className="flex gap-4 items-center flex-1 md:flex-initial">
+                            <div className="flex gap-2 items-center text-[10px] font-mono">
+                              <span className="text-muted-foreground">Start</span>
+                              <input
+                                type="number"
+                                min="0"
+                                max={Math.min(99, sessionRange[1] - 1)}
+                                value={sessionRange[0]}
+                                onChange={(e) => {
+                                  const val = Math.max(0, Math.min(sessionRange[1] - 1, parseInt(e.target.value) || 0))
+                                  setSessionRange([val, sessionRange[1]])
+                                }}
+                                className="w-12 h-6 bg-background border border-border rounded text-center focus:outline-none"
+                              />
+                              <span className="text-muted-foreground">%</span>
+                            </div>
+
+                            <div className="flex gap-2 items-center text-[10px] font-mono">
+                              <span className="text-muted-foreground">End</span>
+                              <input
+                                type="number"
+                                min={Math.max(1, sessionRange[0] + 1)}
+                                max="100"
+                                value={sessionRange[1]}
+                                onChange={(e) => {
+                                  const val = Math.max(sessionRange[0] + 1, Math.min(100, parseInt(e.target.value) || 100))
+                                  setSessionRange([sessionRange[0], val])
+                                }}
+                                className="w-12 h-6 bg-background border border-border rounded text-center focus:outline-none"
+                              />
+                              <span className="text-muted-foreground">%</span>
+                            </div>
+
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              onClick={() => setSessionRange([0, 100])}
+                              className="text-[10px] h-7 px-2 font-bold text-muted-foreground hover:text-foreground"
+                            >
+                              Reset View
                             </Button>
                           </div>
                         </div>
