@@ -60,6 +60,31 @@ MOTION_HIGH_HZ = 3.5   # accel reference bandpass — only motion band, not card
 PPG_DC_HZ      = 0.1   # low-pass for DC baseline
 FILTER_ORDER   = 4
 
+# Beat-detection band: narrower than the 0.5–8 Hz display band on purpose.
+# The wide band keeps harmonics for a realistic pulse *shape*, but those same
+# harmonics + the dicrotic notch create secondary peaks that fool find_peaks
+# into double-counting beats. Fundamental-only filtering gives one clean
+# peak per cardiac cycle for reliable IBI/BPM extraction.
+BEAT_LOW_HZ  = 0.7   # 42 BPM
+BEAT_HIGH_HZ = 3.0   # 180 BPM
+
+# Adaptive peak threshold: local RMS computed over this window, peaks must
+# exceed RMS_HEIGHT_FACTOR × local RMS to count (handles varying contact
+# pressure / signal amplitude over a recording instead of one global cutoff).
+RMS_WINDOW_S      = 4.0
+RMS_HEIGHT_FACTOR = 0.5
+
+# Reject a beat if its IBI deviates from the running median of the last
+# IBI_MEDIAN_WINDOW valid beats by more than IBI_MAX_DEVIATION — catches
+# residual false/missed peaks that slip past the amplitude gate.
+IBI_MEDIAN_WINDOW = 5
+IBI_MAX_DEVIATION = 0.3
+
+# spectral_bpm(): skip a window rather than report a bin if the motion-
+# penalised peak isn't clearly above the noise floor (no finger / signal
+# swamped by motion) — avoids locking onto the band edge, e.g. 210 BPM.
+SPECTRAL_SNR_MIN = 2.0
+
 # Motion detection: dynamic accel magnitude threshold (g, gravity removed)
 MOTION_THRESH_G = 0.05
 
@@ -104,11 +129,28 @@ def motion_cancel(ppg_filt, accel_xyz_filt, order=8):
     return ppg_filt - X @ coeffs
 
 
+def _parabolic_peak(spec, k):
+    """Quadratic interpolation around bin k for sub-bin peak accuracy —
+    turns the raw FFT bin spacing (e.g. 7.5 BPM at an 8 s window) into a
+    much finer-grained estimate instead of a stair-stepped one."""
+    if k <= 0 or k >= len(spec) - 1:
+        return float(k)
+    y0, y1, y2 = spec[k - 1], spec[k], spec[k + 1]
+    denom = y0 - 2 * y1 + y2
+    if denom == 0:
+        return float(k)
+    offset = 0.5 * (y0 - y2) / denom
+    return k + float(np.clip(offset, -0.5, 0.5))
+
+
 def spectral_bpm(signal, accel_mag, fs=FS, window_s=8.0, step_s=2.0):
     """Sliding-window FFT heart rate estimator (motion-robust).
 
     Suppresses FFT bins where the accelerometer spectrum dominates so the
-    selected peak corresponds to the cardiac frequency, not motion.
+    selected peak corresponds to the cardiac frequency, not motion. Windows
+    without a clear cardiac peak (no finger, or motion swamping the signal)
+    are skipped rather than reported — without this gate the argmax can
+    lock onto the band edge (e.g. a flat 210 BPM ceiling) on pure noise.
 
     Returns (times_s, bpms) arrays aligned to window centres.
     """
@@ -119,7 +161,8 @@ def spectral_bpm(signal, accel_mag, fs=FS, window_s=8.0, step_s=2.0):
         return np.array([]), np.array([])
 
     freqs = np.fft.rfftfreq(win, 1.0 / fs)
-    band  = (freqs >= PPG_LOW_HZ) & (freqs <= 3.5)
+    band  = (freqs >= PPG_LOW_HZ) & (freqs <= BEAT_HIGH_HZ)
+    band_idx = np.where(band)[0]
     hann  = np.hanning(win)
 
     times, bpms = [], []
@@ -131,12 +174,17 @@ def spectral_bpm(signal, accel_mag, fs=FS, window_s=8.0, step_s=2.0):
         accel_spec /= (accel_spec[band].max() + 1e-10)
 
         # Penalise bins dominated by motion before peak selection
-        score        = np.clip(ppg_spec - 0.5 * accel_spec, 0, None)
-        score[~band] = 0
+        score          = np.clip(ppg_spec - 0.5 * accel_spec, 0, None)
+        band_score     = score[band_idx]
+        peak_score     = band_score.max()
+        if peak_score < 1e-6 or peak_score < SPECTRAL_SNR_MIN * (np.median(band_score) + 1e-9):
+            continue  # no dominant cardiac peak this window — skip, don't guess
 
-        bpm = freqs[np.argmax(score)] * 60.0
+        k        = band_idx[np.argmax(band_score)]
+        bin_freq = _parabolic_peak(ppg_spec, k) * (freqs[1] - freqs[0])
+
         times.append((start + win // 2) / fs)
-        bpms.append(bpm)
+        bpms.append(bin_freq * 60.0)
 
     return np.array(times), np.array(bpms)
 
@@ -184,13 +232,24 @@ def run_madgwick(df):
     return quats, eulers
 
 
-# ── Beat detection & per-beat metrics ─────────────────────────────────────────
-def compute_beats(ts, ir_filt, red_filt, ir_dc, red_dc, motion):
-    sig_range  = np.ptp(ir_filt)
-    prominence = max(sig_range * 0.10, 10.0)
-    min_dist   = int(FS * 0.33)           # minimum 0.33 s between peaks (max 180 BPM)
+def rolling_rms(sig, window_s, fs=FS):
+    """Centered rolling RMS, used as a local amplitude reference for
+    adaptive peak detection (handles drifting signal amplitude)."""
+    win = max(int(window_s * fs), 1)
+    s   = pd.Series(sig ** 2)
+    return np.sqrt(s.rolling(win, center=True, min_periods=1).mean().to_numpy())
 
-    peaks, _ = find_peaks(ir_filt, prominence=prominence, distance=min_dist)
+
+# ── Beat detection & per-beat metrics ─────────────────────────────────────────
+def compute_beats(ts, ir_beat, ir_filt, red_filt, ir_dc, red_dc, motion):
+    """Detect heartbeats on the narrowband `ir_beat` signal (fundamental
+    only — robust against harmonics/dicrotic notch), then pull SpO2/AC
+    amplitude from the wideband `ir_filt`/`red_filt` over each beat's
+    segment (those need the full pulse shape, not just the fundamental)."""
+    min_dist = int(FS * 0.33)             # minimum 0.33 s between peaks (max 180 BPM)
+    height   = RMS_HEIGHT_FACTOR * rolling_rms(ir_beat, RMS_WINDOW_S)
+
+    peaks, _ = find_peaks(ir_beat, height=height, distance=min_dist)
     if len(peaks) < 2:
         return pd.DataFrame()
 
@@ -203,6 +262,13 @@ def compute_beats(ts, ir_filt, red_filt, ir_dc, red_dc, motion):
 
         if not (250 < ibi_ms < 2000):     # keep 30–240 BPM range
             continue
+
+        # Reject IBIs that jump too far from the recent running median —
+        # catches stray peaks the amplitude gate let through.
+        if len(ibi_hist) >= 3:
+            median_ibi = float(np.median(ibi_hist[-IBI_MEDIAN_WINDOW:]))
+            if abs(ibi_ms - median_ibi) > IBI_MAX_DEVIATION * median_ibi:
+                continue
 
         bpm = 60_000.0 / ibi_ms
         ibi_hist.append(ibi_ms)
@@ -292,10 +358,11 @@ def main():
     print("Computing spectral BPM track...")
     bpm_times, bpm_vals = spectral_bpm(ir_clean, accel_mag)
 
-    # ── Beat metrics (on cleaned signal) ──────────────────────────────────────
+    # ── Beat metrics (fundamental-only signal for peak picking) ───────────────
     print("Detecting heartbeats...")
-    ts       = df["timestamp"].to_numpy()
-    beats_df = compute_beats(ts, ir_clean, red_clean, ir_dc, red_dc, motion)
+    ts      = df["timestamp"].to_numpy()
+    ir_beat = bandpass(ir_clean, BEAT_LOW_HZ, BEAT_HIGH_HZ)
+    beats_df = compute_beats(ts, ir_beat, ir_clean, red_clean, ir_dc, red_dc, motion)
 
     if not beats_df.empty:
         mean_bpm = beats_df["bpm"].mean()

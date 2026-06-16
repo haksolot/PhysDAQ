@@ -67,6 +67,17 @@ WINDOW      = 300       # samples shown in plots (3 s at 100 Hz)
 BAUD        = 115200
 SAMPLE_RATE = 100       # Hz — driven by MAX30102 PPG_RDY interrupt
 
+# BPM estimation needs a much longer window than the 3 s display buffer:
+# at 300 samples the FFT bin width is 100/300 = 0.33 Hz = 20 BPM/bin, far
+# too coarse to be "precise". 8 s gives 7.5 BPM/bin, refined further below
+# with parabolic interpolation around the peak.
+BPM_WINDOW_S = 8.0
+BPM_WINDOW_N = int(BPM_WINDOW_S * SAMPLE_RATE)
+BPM_SNR_MIN  = 3.0       # peak must exceed N× the band's median magnitude
+                          # (rejects "no finger on sensor" / pure noise)
+BPM_MAX_STEP = 4.0        # BPM — clamp per-tick change for a stable display
+BPM_LOST_TICKS = 20        # ~1 s of failed estimates before showing "—" again
+
 GYRO_STILL_THRESHOLD   = 0.05  # rad/s — below this = stationary
 ZUPT_MIN_STILL_SAMPLES = 20    # consecutive still samples before ZUPT
 
@@ -84,7 +95,15 @@ PATTERN = re.compile(
 if _SCIPY_OK:
     # 8 Hz upper edge preserves up to 6th cardiac harmonic at 80 BPM —
     # gives proper PPG pulse shape instead of a flattened sinusoid.
+    # Used for the displayed waveform only — NOT for BPM estimation, see
+    # _BPM_BP_SOS below.
     _BP_SOS = butter(4, [0.5, 8.0], btype="band", fs=SAMPLE_RATE, output="sos")
+
+    # Fundamental-only band for BPM estimation. The wide display band's
+    # harmonics + dicrotic notch can outweigh the fundamental in the FFT,
+    # making the naive argmax lock onto 2x/3x the true heart rate — this
+    # narrower band avoids that failure mode.
+    _BPM_BP_SOS = butter(4, [0.7, 3.0], btype="band", fs=SAMPLE_RATE, output="sos")
 
 def rt_bandpass(arr):
     """Zero-phase bandpass on numpy array; returns zeros if scipy missing."""
@@ -93,17 +112,61 @@ def rt_bandpass(arr):
     return sosfiltfilt(_BP_SOS, arr)
 
 
-def rt_bpm(arr_filt):
-    """FFT-based BPM from a bandpassed window; returns None if unreliable."""
-    if len(arr_filt) < 50:
+def _parabolic_peak(spec, k):
+    """Quadratic interpolation around bin k for sub-bin peak accuracy."""
+    if k <= 0 or k >= len(spec) - 1:
+        return float(k)
+    y0, y1, y2 = spec[k - 1], spec[k], spec[k + 1]
+    denom = (y0 - 2 * y1 + y2)
+    if denom == 0:
+        return float(k)
+    offset = 0.5 * (y0 - y2) / denom
+    return k + float(np.clip(offset, -0.5, 0.5))
+
+
+def rt_bpm_raw(arr):
+    """FFT-based BPM from a long (BPM_WINDOW_S) raw window; returns None if
+    unreliable (too short, or no clear cardiac peak — e.g. no finger)."""
+    if not _SCIPY_OK or len(arr) < BPM_WINDOW_N:
         return None
-    hann  = np.hanning(len(arr_filt))
-    spec  = np.abs(np.fft.rfft(arr_filt * hann))
-    freqs = np.fft.rfftfreq(len(arr_filt), 1.0 / SAMPLE_RATE)
-    band  = (freqs >= 0.5) & (freqs <= 3.5)
-    if not band.any() or spec[band].max() < 1e-6:
+
+    sig   = sosfiltfilt(_BPM_BP_SOS, arr)
+    hann  = np.hanning(len(sig))
+    spec  = np.abs(np.fft.rfft(sig * hann))
+    freqs = np.fft.rfftfreq(len(sig), 1.0 / SAMPLE_RATE)
+    band  = (freqs >= 0.7) & (freqs <= 3.0)
+    if not band.any():
         return None
-    return float(freqs[band][np.argmax(spec[band])]) * 60.0
+
+    band_spec = spec[band]
+    peak_mag  = band_spec.max()
+    if peak_mag < 1e-6 or peak_mag < BPM_SNR_MIN * np.median(band_spec):
+        return None  # no dominant cardiac peak — likely no finger / motion
+
+    band_idx = np.where(band)[0]
+    k        = band_idx[np.argmax(band_spec)]
+    bin_freq = _parabolic_peak(spec, k)
+    freq     = bin_freq * (freqs[1] - freqs[0])
+    return float(freq) * 60.0
+
+
+def rt_bpm_smoothed(raw_bpm, state):
+    """Clamp per-tick jump and gate brief dropouts so the displayed value
+    doesn't blink to '—' on a single noisy estimate, but does reset after
+    BPM_LOST_TICKS consecutive failures (signal genuinely lost)."""
+    if raw_bpm is None:
+        state["lost"] += 1
+        if state["lost"] >= BPM_LOST_TICKS:
+            state["value"] = None
+        return state["value"]
+
+    state["lost"] = 0
+    if state["value"] is None:
+        state["value"] = raw_bpm
+    else:
+        step = np.clip(raw_bpm - state["value"], -BPM_MAX_STEP, BPM_MAX_STEP)
+        state["value"] += step
+    return state["value"]
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +177,10 @@ gy_buf  = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
 gz_buf  = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
 red_buf = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
 ir_buf  = collections.deque([0.0] * WINDOW, maxlen=WINDOW)
+
+# Separate, longer buffer feeding the BPM estimator only (see BPM_WINDOW_S).
+ir_bpm_buf  = collections.deque([0.0] * BPM_WINDOW_N, maxlen=BPM_WINDOW_N)
+bpm_state   = {"value": None, "lost": 0}
 
 ahrs = imufusion.Ahrs()
 try:
@@ -161,6 +228,7 @@ def process_line(line: str) -> None:
 
     red_buf.append(red)
     ir_buf.append(ir)
+    ir_bpm_buf.append(ir)
     gx_buf.append(gx)
     gy_buf.append(gy)
     gz_buf.append(gz)
@@ -501,8 +569,10 @@ def main():
         c_ir_filt.setData(xs, ir_filt)
         c_red_filt.setData(xs, red_filt)
 
-        # BPM from FFT of filtered IR window — update plot title
-        bpm = rt_bpm(ir_filt)
+        # BPM from a dedicated 8 s narrowband window — see BPM_WINDOW_S.
+        # Decoupled from ir_filt (0.5-8 Hz, used only for waveform display).
+        raw_bpm = rt_bpm_raw(np.array(ir_bpm_buf))
+        bpm     = rt_bpm_smoothed(raw_bpm, bpm_state)
         filt_plot.setTitle(f"PPG filtré (0.5–8 Hz) — BPM: {bpm:.0f}" if bpm
                            else "PPG filtré (0.5–8 Hz) — BPM: —")
 

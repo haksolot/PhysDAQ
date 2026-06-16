@@ -15,6 +15,18 @@ make term     # open serial terminal at 115200
 make clean    # remove build/
 ```
 
+## Battery status
+
+Every 5 s the firmware samples VBAT (P0.31/AIN7, via the onboard divider gated
+by P0.14) and reports state of charge over USB console and BLE NUS:
+
+```
+Battery: 71% (3940 mV)
+```
+
+Percentage is derived from a single-cell LiPo discharge curve (4.20 V = 100 %,
+3.30 V = 0 %) — see `firmware/src/battery.c`.
+
 ## Repository structure
 
 ```

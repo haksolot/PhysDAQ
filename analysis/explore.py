@@ -41,10 +41,11 @@ COLORS = {
     "roll":  "#f38ba8",
     "pitch": "#a6e3a1",
     "yaw":   "#89b4fa",
-    "mag":   "#fab387",
-    "bpm":   "#a6e3a1",
-    "rmssd": "#89b4fa",
-    "beat":  "#a6e3a1",
+    "mag":      "#fab387",
+    "bpm":      "#a6e3a1",
+    "spectral": "#f9e2af",
+    "rmssd":    "#89b4fa",
+    "beat":     "#a6e3a1",
 }
 
 
@@ -59,9 +60,10 @@ def load_files(path_arg):
     base = p.stem.removesuffix("_enriched").removesuffix("_beats")
     dir_ = p.parent
 
-    enriched_path = dir_ / f"{base}_enriched.csv"
-    beats_path    = dir_ / f"{base}_beats.csv"
-    raw_path      = dir_ / f"{base}.csv"
+    enriched_path  = dir_ / f"{base}_enriched.csv"
+    beats_path     = dir_ / f"{base}_beats.csv"
+    spectral_path  = dir_ / f"{base}_bpm_spectral.csv"
+    raw_path       = dir_ / f"{base}.csv"
 
     if enriched_path.exists():
         df    = pd.read_csv(enriched_path)
@@ -73,8 +75,9 @@ def load_files(path_arg):
         df    = pd.read_csv(p)
         label = p.name
 
-    beats_df = pd.read_csv(beats_path) if beats_path.exists() else None
-    return df, beats_df, label
+    beats_df    = pd.read_csv(beats_path)    if beats_path.exists()    else None
+    spectral_df = pd.read_csv(spectral_path) if spectral_path.exists() else None
+    return df, beats_df, spectral_df, label
 
 
 # ── Plot helpers ──────────────────────────────────────────────────────────────
@@ -116,7 +119,7 @@ def main():
         print("       make explore FILE=logs/....csv")
         sys.exit(1)
 
-    df, beats_df, label = load_files(sys.argv[1])
+    df, beats_df, spectral_df, label = load_files(sys.argv[1])
     df = df.apply(pd.to_numeric, errors="coerce")
 
     t            = df["timestamp"].to_numpy()
@@ -124,14 +127,18 @@ def main():
     duration     = float(t[-1] - t[0])
     has_enriched = "red_filt" in df.columns
     has_beats    = beats_df is not None and not beats_df.empty
+    has_spectral = spectral_df is not None and not spectral_df.empty
 
-    beats_df = beats_df.apply(pd.to_numeric, errors="coerce") if has_beats else None
+    beats_df    = beats_df.apply(pd.to_numeric, errors="coerce")    if has_beats    else None
+    spectral_df = spectral_df.apply(pd.to_numeric, errors="coerce") if has_spectral else None
 
     print(f"Loaded : {label}  ({N} samples, {duration:.1f} s)")
     if has_enriched:
         print("  Colonnes enrichies détectées (PPG filtré, orientation, motion)")
     if has_beats:
         print(f"  Fichier beats : {len(beats_df)} battements")
+    if has_spectral:
+        print(f"  Piste BPM spectrale : {len(spectral_df)} fenêtres")
 
     app = QtWidgets.QApplication(sys.argv)
     pg.setConfigOptions(antialias=True, background="#1e1e2e", foreground="#cdd6f4")
@@ -163,7 +170,7 @@ def main():
     panels = ["ppg_raw"]
     if has_enriched:
         panels += ["ppg_filt", "orientation", "motion"]
-    if has_beats:
+    if has_beats or has_spectral:
         panels.insert(panels.index("ppg_filt") + 1 if "ppg_filt" in panels else 1, "bpm")
     panels.append("gyro")
 
@@ -186,7 +193,7 @@ def main():
 
         # ── PPG Filtré + marqueurs battements ──────────────────────────────
         elif panel == "ppg_filt":
-            p = new_plot(glw, row, "PPG — filtré 0.5–4 Hz", "ADC counts",
+            p = new_plot(glw, row, "PPG — filtré 0.5–8 Hz", "ADC counts",
                          ref, last=is_last)
             p.addLegend(offset=(10, 10))
             p.plot(t, df["red_filt"].to_numpy(),
@@ -206,19 +213,27 @@ def main():
             p = new_plot(glw, row, "BPM  +  RMSSD HRV (ms)", "valeur",
                          ref, last=is_last)
             p.addLegend(offset=(10, 10))
-            bt       = beats_df["beat_time"].dropna().to_numpy().astype(float)
-            bpm_vals = beats_df["bpm"].to_numpy().astype(float)
-            p.plot(bt, bpm_vals, pen=None,
-                   symbol="o", symbolSize=7,
-                   symbolBrush=COLORS["bpm"], symbolPen=None,
-                   name="BPM")
-            if "rmssd_ms" in beats_df.columns:
-                rmssd = beats_df["rmssd_ms"].to_numpy().astype(float)
-                mask  = ~np.isnan(rmssd)
-                if mask.any():
-                    p.plot(bt[mask], rmssd[mask],
-                           pen=pg.mkPen(COLORS["rmssd"], width=2),
-                           name="RMSSD (ms)")
+            if has_spectral:
+                # Sliding-window FFT estimate — motion-robust and far less
+                # jittery than per-beat peak picking; the stable reference.
+                p.plot(spectral_df["time_s"].to_numpy(),
+                       spectral_df["bpm"].to_numpy(),
+                       pen=pg.mkPen(COLORS["spectral"], width=2),
+                       name="BPM spectral")
+            if has_beats:
+                bt       = beats_df["beat_time"].dropna().to_numpy().astype(float)
+                bpm_vals = beats_df["bpm"].to_numpy().astype(float)
+                p.plot(bt, bpm_vals, pen=None,
+                       symbol="o", symbolSize=7,
+                       symbolBrush=COLORS["bpm"], symbolPen=None,
+                       name="BPM (battement)")
+                if "rmssd_ms" in beats_df.columns:
+                    rmssd = beats_df["rmssd_ms"].to_numpy().astype(float)
+                    mask  = ~np.isnan(rmssd)
+                    if mask.any():
+                        p.plot(bt[mask], rmssd[mask],
+                               pen=pg.mkPen(COLORS["rmssd"], width=2),
+                               name="RMSSD (ms)")
 
         # ── Gyroscope ──────────────────────────────────────────────────────
         elif panel == "gyro":
