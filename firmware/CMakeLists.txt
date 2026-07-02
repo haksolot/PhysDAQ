@@ -16,4 +16,5 @@ target_sources(app PRIVATE
     src/ble.c
     src/battery.c
     src/contact.c
+    src/watchdog.c
 )

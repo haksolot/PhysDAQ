@@ -121,6 +121,14 @@ export default function App() {
   const staticPpgRef = useRef<any[]>([])
   const staticImuRef = useRef<any[]>([])
 
+  // Coalescing buffer for live sensor samples. Samples arrive at up to 100 Hz;
+  // calling setSensors per sample re-renders the whole app at that rate and
+  // lets the IPC backlog snowball until the UI freezes. Instead we stash the
+  // latest sample per sensor here and flush to React state once per animation
+  // frame (≤60 Hz), coalescing bursts into a single render.
+  const pendingSamplesRef = useRef<Record<string, any>>({})
+  const flushScheduledRef = useRef<boolean>(false)
+
   // Session Zoom Range state
   const [sessionRange, setSessionRange] = useState<[number, number]>([0, 100])
 
@@ -201,42 +209,67 @@ export default function App() {
 
   // IPC listeners
   useEffect(() => {
+    // Flush the latest coalesced sample for each sensor into React state.
+    // Runs at most once per animation frame, so a burst of queued samples
+    // produces a single re-render instead of one per sample.
+    let flushRafId = 0
+    const flushPending = (): void => {
+      flushScheduledRef.current = false
+      flushRafId = 0
+      const pending = pendingSamplesRef.current
+      const ids = Object.keys(pending)
+      if (ids.length === 0) return
+      pendingSamplesRef.current = {}
+      setSensors((prev) => {
+        let changed = false
+        const next = { ...prev }
+        for (const id of ids) {
+          const node = prev[id]
+          if (!node) continue
+          const d = pending[id]
+          next[id] = {
+            ...node,
+            bpm: d.bpm,
+            contact: d.contact,
+            quat: d.quat,
+            ax: d.ax, ay: d.ay, az: d.az,
+            gx: d.gx, gy: d.gy, gz: d.gz
+          }
+          changed = true
+        }
+        return changed ? next : prev
+      })
+    }
+    const scheduleFlush = (): void => {
+      if (flushScheduledRef.current) return
+      flushScheduledRef.current = true
+      flushRafId = requestAnimationFrame(flushPending)
+    }
+
     const unsubscribeSensor = window.api.onSensorData((data) => {
       const { sensorId } = data
       if (!sensorId) return
 
-      setSensors((prev) => {
-        const node = prev[sensorId]
-        if (!node) return prev
+      if (data.type === 'battery') {
+        setSensors((prev) => {
+          const node = prev[sensorId]
+          if (!node) return prev
+          return { ...prev, [sensorId]: { ...node, battery: { pct: data.pct, mv: data.mv } } }
+        })
+        return
+      }
 
-        if (data.type === 'battery') {
-          return {
-            ...prev,
-            [sensorId]: { ...node, battery: { pct: data.pct, mv: data.mv } }
-          }
+      if (data.type === 'sample') {
+        // Feed the chart buffer at full data rate — a cheap ref write, read by
+        // RealTimeChart's own rAF loop, so it needs no re-render.
+        if (currentPage === 'detail' && selectedSensorId === sensorId) {
+          dataRef.current.push(data)
+          if (dataRef.current.length > 300) dataRef.current.shift()
         }
-
-        if (data.type === 'sample') {
-          // If we are currently displaying detail page for this sensor, append to chart ref
-          if (currentPage === 'detail' && selectedSensorId === sensorId) {
-            dataRef.current.push(data)
-            if (dataRef.current.length > 300) dataRef.current.shift()
-          }
-
-          return {
-            ...prev,
-            [sensorId]: {
-              ...node,
-              bpm: data.bpm,
-              contact: data.contact,
-              quat: data.quat,
-              ax: data.ax, ay: data.ay, az: data.az,
-              gx: data.gx, gy: data.gy, gz: data.gz
-            }
-          }
-        }
-        return prev
-      })
+        // Coalesce the numeric/quaternion state update to once per frame.
+        pendingSamplesRef.current[sensorId] = data
+        scheduleFlush()
+      }
     })
 
     const unsubscribeLogs = window.api.onSidecarLog(({ sensorId, log }) => {
@@ -283,6 +316,8 @@ export default function App() {
       unsubscribeSensor()
       unsubscribeLogs()
       unsubscribeStatus()
+      if (flushRafId) cancelAnimationFrame(flushRafId)
+      flushScheduledRef.current = false
     }
   }, [currentPage, selectedSensorId])
 

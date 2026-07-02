@@ -27,6 +27,15 @@ export function RealTimeChart({
 }: RealTimeChartProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
+  // Keep the latest drawing config in a ref so the animation loop can read it
+  // without the effect having to re-run. The parent re-renders at the sensor
+  // data rate (up to 100 Hz) and passes `channels`/`fixedRange` as inline
+  // literals, so depending on them here would tear down and rebuild the canvas
+  // (including a canvas.width reallocation) on every sample — the churn that
+  // eventually froze the UI. The effect below now runs once per mount.
+  const cfgRef = useRef({ channels, maxSamples, yLabel, autoScale, fixedRange })
+  cfgRef.current = { channels, maxSamples, yLabel, autoScale, fixedRange }
+
   useEffect(() => {
     let animationId: number
     const canvas = canvasRef.current
@@ -35,23 +44,29 @@ export function RealTimeChart({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    // Handle high DPI displays
+    // Size the backing store for the display DPI. Only runs on mount and on
+    // real resize events — never per frame — to avoid reallocating the canvas.
+    let dpr = window.devicePixelRatio || 1
     const resizeCanvas = (): void => {
       const rect = canvas.getBoundingClientRect()
-      const dpr = window.devicePixelRatio || 1
+      dpr = window.devicePixelRatio || 1
       canvas.width = rect.width * dpr
       canvas.height = rect.height * dpr
-      ctx.scale(dpr, dpr)
     }
 
     resizeCanvas()
     window.addEventListener('resize', resizeCanvas)
 
     const draw = (): void => {
+      const { channels, maxSamples, yLabel, autoScale, fixedRange } = cfgRef.current
+
       const rect = canvas.getBoundingClientRect()
       const width = rect.width
       const height = rect.height
 
+      // Apply the DPI scale fresh each frame (idempotent) instead of a
+      // cumulative ctx.scale(), so we don't need to reset via canvas.width.
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       ctx.clearRect(0, 0, width, height)
 
       // Background grid
@@ -170,7 +185,9 @@ export function RealTimeChart({
       window.removeEventListener('resize', resizeCanvas)
       cancelAnimationFrame(animationId)
     }
-  }, [channels, dataRef, maxSamples, autoScale, fixedRange, yLabel])
+    // dataRef is a stable ref object; cfgRef carries the changing props, so
+    // this effect intentionally sets up the render loop only once per mount.
+  }, [dataRef])
 
   return (
     <div className="flex flex-col h-full rounded-xl bg-[#181825]/60 border border-[#313244]/50 backdrop-blur-md overflow-hidden">

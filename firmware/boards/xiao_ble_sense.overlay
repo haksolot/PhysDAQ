@@ -47,6 +47,13 @@
 	};
 };
 
+/* Hardware watchdog — last-resort recovery if main() ever hangs
+ * (see firmware/src/watchdog.c). Usually already enabled on nRF52840, but
+ * make it explicit so the build never silently drops the WDT. */
+&wdt0 {
+	status = "okay";
+};
+
 &adc {
 	#address-cells = <1>;
 	#size-cells = <0>;

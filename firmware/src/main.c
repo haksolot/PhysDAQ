@@ -7,6 +7,7 @@
 #include "ble.h"
 #include "battery.h"
 #include "contact.h"
+#include "watchdog.h"
 
 /* Format a sensor_value (val1 + val2/1e6) as "±integer.milli" using printk.
  * Mirrors the print_val helper in imu.c, kept local to avoid coupling. */
@@ -36,6 +37,10 @@ int main(void)
         printk("BLE init failed — running USB-only\n");
     }
 
+    /* Arm the watchdog only after all (potentially slow) init has finished,
+     * so init delays can never trip it. From here on, main() must feed it. */
+    watchdog_init();
+
     printk("\n=== MAID: PPG + IMU acquisition ===\n");
     printk("PPG: SpO2 mode, 100 Hz, 18-bit ADC\n");
     printk("IMU: accel [m/s^2], gyro [rad/s]\n");
@@ -44,15 +49,29 @@ int main(void)
     printk("Power: sleep after %d s idle\n\n",
            CONFIG_MAID_IDLE_TIMEOUT_SEC);
 
+    int64_t last_data_ms = k_uptime_get();
+
     while (1) {
-        if (max30102_wait_ready(K_MSEC(500)) < 0) {
-            continue;
-        }
+        /* Feed the watchdog once per outer iteration. The loop turns over at
+         * least every 200 ms (the max30102_wait_ready timeout), so if anything
+         * below hangs — a wedged I2C transfer in particular — the feeds stop
+         * and the SoC resets itself within the WDT window instead of freezing
+         * indefinitely. */
+        watchdog_feed();
+
+        /* Wait for a PPG_RDY interrupt, or fall through on the timeout. The
+         * timeout path is harmless and self-healing: max30102_wait_ready()
+         * clears the interrupt flag on every wake, and max30102_fetch() polls
+         * the FIFO (returning -ENODATA when empty), so a missed edge costs one
+         * timeout of latency rather than a permanent stall. */
+        max30102_wait_ready(K_MSEC(200));
 
         struct ppg_sample ppg;
         struct imu_sample imu;
+        bool got_data = false;
 
         while (max30102_fetch(&ppg) == 0) {
+            got_data = true;
             if (imu_fetch_sample(&imu) < 0) {
                 continue;
             }
@@ -97,6 +116,20 @@ int main(void)
                 printk("%s", batt_line);
                 ble_send((const uint8_t *)batt_line, batt_n);
             }
+        }
+
+        /* Sensor-stall recovery. If the FIFO produced nothing for over a
+         * second the MAX30102 (or its I2C bus) has stalled — the CPU is fine,
+         * so the watchdog won't help. Re-running init recovers the bus and
+         * fully reconfigures the sensor, restarting acquisition instead of
+         * leaving the whole pipeline (serial + BLE + power mgmt) frozen. */
+        int64_t now = k_uptime_get();
+        if (got_data) {
+            last_data_ms = now;
+        } else if (now - last_data_ms > 1000) {
+            printk("MAX30102: no data for >1s — reinitialising sensor\n");
+            max30102_init();
+            last_data_ms = k_uptime_get();
         }
     }
 

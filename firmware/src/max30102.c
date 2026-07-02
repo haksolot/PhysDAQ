@@ -29,8 +29,13 @@
  *   bits[1:0] = 0b11  18-bit resolution (411 µs pulse width)       */
 #define SPO2_CFG          0x67U
 
-/* FIFO_CONFIG: no sample averaging, no rollover, A_FULL threshold = 0 */
-#define FIFO_CFG          0x00U
+/* FIFO_CONFIG: no sample averaging, A_FULL threshold = 0, ROLLOVER_EN=1.
+ * Rollover is essential: with it disabled (0x00), once the 32-deep FIFO fills
+ * the sensor STOPS writing and the write pointer freezes, so max30102_fetch()
+ * sees wr==rd forever and acquisition stalls permanently (device stays alive,
+ * just silent). With rollover the FIFO overwrites the oldest sample instead,
+ * so the write pointer always advances and data never stops. */
+#define FIFO_CFG          0x10U
 
 /* LED pulse amplitude: 0x1F × 200 µA/LSB ≈ 6.2 mA */
 #define LED_PA            0x1FU
@@ -184,11 +189,18 @@ int max30102_init(void)
 
 int max30102_wait_ready(k_timeout_t timeout)
 {
-	int ret = k_sem_take(&ppg_sem, timeout);
-
-	if (ret < 0) {
-		return ret;  /* -EAGAIN on timeout */
-	}
+	/* Block until the PPG_RDY interrupt fires, or the timeout elapses.
+	 * We intentionally ignore the take result and fall through on timeout:
+	 * this self-heals a wedged interrupt handshake. The interrupt is
+	 * edge-triggered (falling), so if a single I2C hiccup ever leaves INT
+	 * asserted LOW with its status flag unread, no further falling edge can
+	 * occur and the ISR would never fire again — the acquisition thread
+	 * would block here forever (the exact freeze we hit). Clearing
+	 * INT_STATUS1 below on every wake, including timeouts, deasserts INT
+	 * HIGH so the next PPG_RDY produces a fresh edge, and the caller polls
+	 * the FIFO regardless — so a missed edge costs at most one timeout of
+	 * latency instead of a permanent hang. */
+	(void)k_sem_take(&ppg_sem, timeout);
 
 	/* Reading INT_STATUS1 clears the hardware interrupt line */
 	uint8_t status;

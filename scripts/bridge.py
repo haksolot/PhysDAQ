@@ -12,6 +12,7 @@ Usage:
 """
 
 import sys
+import os
 import re
 import json
 import time
@@ -415,10 +416,15 @@ def ble_reader(addr_hint):
     asyncio.run(_run())
 
 def stdin_watchdog():
-    # Watch stdin, when parent Electron closes, stdin gets EOF and we exit
+    # Watch stdin; when the parent Electron process closes it, stdin hits EOF.
     sys.stdin.read()
     sys.stderr.write("Bridge: stdin closed, exiting...\n")
-    sys.exit(0)
+    # os._exit(), not sys.exit(): this runs in a daemon thread, where
+    # sys.exit() only raises SystemExit in *this* thread and leaves the main
+    # thread (serial reader / asyncio BLE loop) running forever — orphaning the
+    # process and keeping the serial port / BLE connection locked. os._exit()
+    # terminates the whole process immediately, releasing those resources.
+    os._exit(0)
 
 def main():
     # Start stdin watchdog thread
