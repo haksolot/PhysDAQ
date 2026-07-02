@@ -165,6 +165,19 @@ int max30102_init(void)
 	gpio_init_callback(&int_cb_data, ppg_int_isr, BIT(dev_int.pin));
 	gpio_add_callback(dev_int.port, &int_cb_data);
 
+	/* Clear the interrupt that latched during the >200 ms init sequence.
+	 * The sensor is already streaming at 100 Hz, so PPG_RDY has almost
+	 * certainly pulled INT LOW by now. If we leave it low after arming the
+	 * falling-edge trigger, no further edge ever arrives and the acquisition
+	 * thread blocks forever in max30102_wait_ready(). Reading INT_STATUS1
+	 * deasserts INT HIGH so the next sample produces a real falling edge. */
+	uint8_t int_status;
+	reg_read(REG_INT_STATUS1, &int_status);
+
+	/* Kick the consumer once in case the very first edge was missed while
+	 * the interrupt was being armed — the FIFO already holds data. */
+	k_sem_give(&ppg_sem);
+
 	printk("MAX30102: ready (SpO2, 100 Hz, 18-bit ADC)\n");
 	return 0;
 }

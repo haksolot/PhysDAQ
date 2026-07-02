@@ -4,9 +4,22 @@ import { existsSync, mkdirSync, createWriteStream, WriteStream, readdirSync, sta
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { is } from '@electron-toolkit/utils'
 
+function getRepoRoot(): string {
+  try {
+    const appPath = app.getAppPath()
+    const repoRoot = join(appPath, '..')
+    if (existsSync(join(repoRoot, 'scripts/bridge.py'))) {
+      return repoRoot
+    }
+  } catch (e) {
+    console.error('[Sidecar] getAppPath failed, falling back:', e)
+  }
+  return join(__dirname, '../../..')
+}
+
 function getPythonCommand(): string {
   if (is.dev) {
-    const repoRoot = join(__dirname, '../../..')
+    const repoRoot = getRepoRoot()
     const winVenvPython = join(repoRoot, '.venv/Scripts/python.exe')
     const unixVenvPython = join(repoRoot, '.venv/bin/python')
 
@@ -17,6 +30,18 @@ function getPythonCommand(): string {
     }
   }
   return 'python'
+}
+
+// Build a clean environment for the spawned Python process.
+// We invoke our own venv/bundled interpreter explicitly, so any inherited
+// PYTHONPATH/PYTHONHOME (e.g. set by scripts/setup-env.ps1 for the Zephyr
+// toolchain) must be stripped — otherwise the toolchain's site-packages
+// shadow the venv's and numpy fails to load its C-extensions.
+function getPythonEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  delete env.PYTHONPATH
+  delete env.PYTHONHOME
+  return env
 }
 
 function parsePythonJsonOutput(stdout: string): any {
@@ -76,7 +101,8 @@ export function startSidecar(mainWindow: BrowserWindow): void {
     let args: string[] = []
 
     if (is.dev) {
-      const bridgePath = join(__dirname, '../../../scripts/bridge.py')
+      const repoRoot = getRepoRoot()
+      const bridgePath = join(repoRoot, 'scripts/bridge.py')
       args = [bridgePath]
     } else {
       command = join(process.resourcesPath, 'bridge.exe')
@@ -97,7 +123,8 @@ export function startSidecar(mainWindow: BrowserWindow): void {
 
     try {
       const p = spawn(command, args, {
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: getPythonEnv()
       })
 
       activeSensors.set(config.id, {
@@ -120,6 +147,14 @@ export function startSidecar(mainWindow: BrowserWindow): void {
             const json = JSON.parse(trimmed)
             const enriched = { ...json, sensorId: config.id, position: config.position }
             mainWindowRef?.webContents.send('sensor-data', enriched)
+
+            // Intercept status messages from the python bridge
+            if (json.status && (json.status === 'connected' || json.status === 'disconnected' || json.status === 'connecting')) {
+              mainWindowRef?.webContents.send('sensor-status', {
+                sensorId: config.id,
+                status: json.status
+              })
+            }
 
             // If recording, write to CSV
             if (isRecording) {
@@ -164,7 +199,7 @@ export function startSidecar(mainWindow: BrowserWindow): void {
 
       mainWindowRef?.webContents.send('sensor-status', {
         sensorId: config.id,
-        status: 'connected'
+        status: 'connecting'
       })
 
     } catch (err) {
@@ -426,14 +461,17 @@ app.on('will-quit', () => {
 export function getSerialPorts(): Promise<any[]> {
   return new Promise((resolve, reject) => {
     let command = getPythonCommand()
-    let args = [join(__dirname, '../../../scripts/bridge.py'), '--list-ports']
+    let args: string[] = []
 
-    if (!is.dev) {
+    if (is.dev) {
+      const repoRoot = getRepoRoot()
+      args = [join(repoRoot, 'scripts/bridge.py'), '--list-ports']
+    } else {
       command = join(process.resourcesPath, 'bridge.exe')
       args = ['--list-ports']
     }
 
-    exec(`"${command}" ${args.join(' ')}`, (err, stdout, stderr) => {
+    exec(`"${command}" ${args.join(' ')}`, { env: getPythonEnv() }, (err, stdout, stderr) => {
       const parsed = parsePythonJsonOutput(stdout)
       if (parsed && typeof parsed === 'object' && parsed.error) {
         reject(new Error(parsed.error))
@@ -462,14 +500,17 @@ export function getSerialPorts(): Promise<any[]> {
 export function scanBle(): Promise<any[]> {
   return new Promise((resolve, reject) => {
     let command = getPythonCommand()
-    let args = [join(__dirname, '../../../scripts/bridge.py'), '--scan']
+    let args: string[] = []
 
-    if (!is.dev) {
+    if (is.dev) {
+      const repoRoot = getRepoRoot()
+      args = [join(repoRoot, 'scripts/bridge.py'), '--scan']
+    } else {
       command = join(process.resourcesPath, 'bridge.exe')
       args = ['--scan']
     }
 
-    exec(`"${command}" ${args.join(' ')}`, (err, stdout, stderr) => {
+    exec(`"${command}" ${args.join(' ')}`, { env: getPythonEnv() }, (err, stdout, stderr) => {
       const parsed = parsePythonJsonOutput(stdout)
       if (parsed && typeof parsed === 'object' && parsed.error) {
         reject(new Error(parsed.error))

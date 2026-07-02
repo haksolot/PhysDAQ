@@ -301,6 +301,7 @@ def find_xiao_port():
     return candidates[0].device if candidates else ports[0].device
 
 def serial_reader(port):
+    print(json.dumps({"status": "connecting"}), flush=True)
     ser = None
     while True:
         active_port = port
@@ -308,12 +309,13 @@ def serial_reader(port):
             active_port = find_xiao_port()
             if not active_port:
                 sys.stderr.write("Serial: Xiao port not found, retrying in 2 s...\n")
-                print(json.dumps({"status": "disconnected"}), flush=True)
+                print(json.dumps({"status": "connecting"}), flush=True)
                 time.sleep(2.0)
                 continue
 
         try:
             sys.stderr.write(f"Serial: Opening {active_port}...\n")
+            print(json.dumps({"status": "connecting"}), flush=True)
             ser = serial.Serial(active_port, BAUD, timeout=1)
             sys.stderr.write(f"Bridge connected to Serial {active_port}\n")
             print(json.dumps({"status": "connected", "port": active_port}), flush=True)
@@ -336,6 +338,7 @@ def serial_reader(port):
 
 # BLE transport
 def ble_reader(addr_hint):
+    print(json.dumps({"status": "connecting"}), flush=True)
     try:
         import asyncio
         from bleak import BleakScanner, BleakClient
@@ -350,33 +353,53 @@ def ble_reader(addr_hint):
         nonlocal addr_hint
         
         while True:
-            active_addr = addr_hint
-            if not active_addr:
-                sys.stderr.write("BLE: scanning for MAID wearable...\n")
-                print(json.dumps({"status": "disconnected"}), flush=True)
-                found = await BleakScanner.discover(timeout=4.0, service_uuids=[NUS_SERVICE_UUID])
-                if not found:
-                    # Unfiltered fallback
-                    all_devs = await BleakScanner.discover(timeout=3.0)
-                    found = [d for d in all_devs if NUS_SERVICE_UUID in [u.lower() for u in (d.metadata.get("uuids") or [])]]
-                if not found:
-                    sys.stderr.write("BLE: no sensor found, retrying in 3 s...\n")
-                    await asyncio.sleep(3.0)
-                    continue
-                active_addr = found[0].address
-
-            sys.stderr.write(f"BLE: connecting to {active_addr}...\n")
-            
-            buf = ""
-            def on_notify(char, data):
-                nonlocal buf
-                buf += data.decode("utf-8", errors="replace")
-                while "\n" in buf:
-                    line, buf = buf.split("\n", 1)
-                    process_sample(line)
-
             try:
-                async with BleakClient(active_addr, timeout=10.0) as client:
+                # Always resolve a BLEDevice via a scan before connecting.
+                # On Windows (WinRT) BleakClient cannot connect to a bare
+                # address that hasn't been discovered in this session — it
+                # raises "Device with address ... was not found". This applies
+                # even when the address comes from the app's own --scan step,
+                # because that scan ran in a separate process. Resolving the
+                # device object here (find_device_by_address / discover) is the
+                # reliable cross-platform pattern.
+                device = None
+                if addr_hint:
+                    sys.stderr.write(f"BLE: looking up {addr_hint}...\n")
+                    print(json.dumps({"status": "connecting"}), flush=True)
+                    device = await BleakScanner.find_device_by_address(addr_hint, timeout=10.0)
+                    if device is None:
+                        sys.stderr.write(f"BLE: {addr_hint} not found, retrying in 3 s...\n")
+                        print(json.dumps({"status": "connecting"}), flush=True)
+                        await asyncio.sleep(3.0)
+                        continue
+                else:
+                    sys.stderr.write("BLE: scanning for MAID wearable...\n")
+                    print(json.dumps({"status": "connecting"}), flush=True)
+                    found = await BleakScanner.discover(timeout=4.0, service_uuids=[NUS_SERVICE_UUID])
+                    if not found:
+                        # Unfiltered fallback
+                        all_devs = await BleakScanner.discover(timeout=3.0)
+                        found = [d for d in all_devs if NUS_SERVICE_UUID in [u.lower() for u in (d.metadata.get("uuids") or [])]]
+                    if not found:
+                        sys.stderr.write("BLE: no sensor found, retrying in 3 s...\n")
+                        print(json.dumps({"status": "connecting"}), flush=True)
+                        await asyncio.sleep(3.0)
+                        continue
+                    device = found[0]
+
+                active_addr = device.address
+                sys.stderr.write(f"BLE: connecting to {active_addr}...\n")
+                print(json.dumps({"status": "connecting"}), flush=True)
+
+                buf = ""
+                def on_notify(char, data):
+                    nonlocal buf
+                    buf += data.decode("utf-8", errors="replace")
+                    while "\n" in buf:
+                        line, buf = buf.split("\n", 1)
+                        process_sample(line)
+
+                async with BleakClient(device, timeout=10.0) as client:
                     sys.stderr.write(f"Bridge connected to BLE {active_addr}\n")
                     print(json.dumps({"status": "connected", "ble_addr": active_addr}), flush=True)
                     await client.start_notify(NUS_TX_UUID, on_notify)
