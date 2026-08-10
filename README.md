@@ -22,12 +22,11 @@
 
 ## Quick start
 
-1. **Install the desktop app.** Download the installer from the
-   [Releases page](https://github.com/haksolot/PhysDAQ/releases). It is
-   unsigned, so Windows will warn you once; the
+1. **Install the desktop app.** Download it from the
+   [Releases page](https://github.com/haksolot/PhysDAQ/releases) — `.exe` for
+   Windows, `.dmg` for Mac, `.AppImage` or `.deb` for Linux. The downloads are
+   unsigned, so your system will warn you once; the
    [User Guide](docs/user-guide.md#installing-the-app) says what to click.
-   *(Windows only for now — on Mac and Linux, see
-   [Working on PhysDAQ](#working-on-physdaq) to run it from source.)*
 2. **Connect a sensor.** Plug it into a USB port, or pair it over Bluetooth from
    the app. The app finds it either way — nothing to configure.
 3. **Name your session and press Record.** Every connected sensor is recorded at
