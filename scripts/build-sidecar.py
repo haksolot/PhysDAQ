@@ -104,8 +104,10 @@ def smoke_test() -> None:
         sys.exit(1)
     print(f"[build-sidecar] --list-ports -> {result.stdout.strip()[:200]}")
 
-    print(f"[build-sidecar] Smoke test: {BIN} --scan")
-    result = subprocess.run([BIN, "--scan"], capture_output=True, text=True, timeout=120)
+    # --scan-all, not --scan: the filtered scan legitimately returns [] when no
+    # node is powered on, which would prove nothing about the BLE backend.
+    print(f"[build-sidecar] Smoke test: {BIN} --scan-all")
+    result = subprocess.run([BIN, "--scan-all"], capture_output=True, text=True, timeout=120)
     if result.returncode != 0 or '"error"' in result.stdout:
         print("WARNING: BLE scan did not return devices.")
         print(result.stdout.strip())

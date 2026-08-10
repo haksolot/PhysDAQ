@@ -31,7 +31,10 @@ const api = {
     ipcRenderer.send('disconnect-sensor', id)
   },
   getSerialPorts: () => ipcRenderer.invoke('get-serial-ports'),
-  scanBle: () => ipcRenderer.invoke('scan-ble'),
+  scanBle: (all?: boolean) => ipcRenderer.invoke('scan-ble', all),
+  getNodeAliases: () => ipcRenderer.invoke('get-node-aliases'),
+  setNodeAlias: (target: string, alias: string) =>
+    ipcRenderer.invoke('set-node-alias', target, alias),
   startRecording: (sessionName: string) => ipcRenderer.invoke('start-recording', sessionName),
   stopRecording: () => ipcRenderer.invoke('stop-recording'),
   getRecordings: () => ipcRenderer.invoke('get-recordings'),

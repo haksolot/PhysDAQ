@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { RealTimeChart } from './components/RealTimeChart'
 import { BoardVisualizer } from './components/BoardVisualizer'
 import { PhysDaqMark } from './components/PhysDaqMark'
@@ -13,13 +13,7 @@ import {
 import {
   Card
 } from '@/components/ui/card'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { 
   Heart, 
@@ -83,10 +77,17 @@ export default function App() {
 
   // Device discovery lists
   const [serialPorts, setSerialPorts] = useState<{ port: string; desc: string; hwid: string }[]>([])
-  const [bleDevices, setBleDevices] = useState<{ address: string; name: string }[]>([])
+  const [bleDevices, setBleDevices] = useState<{ address: string; name: string; rssi: number | null }[]>([])
   const [isScanning, setIsScanning] = useState<boolean>(false)
   const [isFetchingPorts, setIsFetchingPorts] = useState<boolean>(false)
   const [scanError, setScanError] = useState<string | null>(null)
+  // Drops the NUS service-UUID filter — every BLE advertiser in range.
+  const [showAllBle, setShowAllBle] = useState<boolean>(false)
+
+  // Friendly names for physical nodes, keyed by MAC address or COM port.
+  // Persisted in userData; distinct from a slot's body-position `label`.
+  const [nodeAliases, setNodeAliases] = useState<Record<string, string>>({})
+  const [aliasDraft, setAliasDraft] = useState<string>('')
 
   // Disconnect alert popup states
   const [showDisconnectDialog, setShowDisconnectDialog] = useState<boolean>(false)
@@ -138,8 +139,11 @@ export default function App() {
     try {
       const ports = await window.api.getSerialPorts()
       setSerialPorts(ports)
+      // Only fill an empty box. The dialog seeds `target` from the node it was
+      // opened on, and results arriving later must not overwrite that — nor
+      // anything the user has since typed or picked.
       if (ports && ports.length > 0) {
-        setTarget(ports[0].port)
+        setTarget((prev) => prev || ports[0].port)
       }
     } catch (err: any) {
       console.error('Error fetching ports:', err)
@@ -154,10 +158,10 @@ export default function App() {
     setIsScanning(true)
     setScanError(null)
     try {
-      const devices = await window.api.scanBle()
+      const devices = await window.api.scanBle(showAllBle)
       setBleDevices(devices)
       if (devices && devices.length > 0) {
-        setTarget(devices[0].address)
+        setTarget((prev) => prev || devices[0].address)
       }
     } catch (err: any) {
       console.error('Error scanning BLE:', err)
@@ -181,7 +185,71 @@ export default function App() {
         fetchPorts()
       }
     }
-  }, [configureOpen, mode])
+  }, [configureOpen, mode, showAllBle])
+
+  // Node aliases live on disk; load once and keep the local copy in step with
+  // whatever the main process returns after a write.
+  useEffect(() => {
+    window.api
+      .getNodeAliases()
+      .then(setNodeAliases)
+      .catch((err) => console.error('Error loading node aliases:', err))
+  }, [])
+
+  // Show the stored alias for whatever target is currently selected.
+  useEffect(() => {
+    setAliasDraft(target ? (nodeAliases[target] ?? '') : '')
+  }, [target, nodeAliases])
+
+  // Rows for the target picker: the auto-detect sentinel, then whatever the
+  // current transport discovered. `keywords` is everything the filter box
+  // matches on — including a serial port's desc/hwid, which are fetched but
+  // never displayed, and so are free extra search material.
+  const targetOptions = useMemo<ComboboxOption[]>(() => {
+    const autoDetect: ComboboxOption = {
+      value: 'auto-detect',
+      label: '-- Auto-detect --',
+      keywords: ['auto', 'detect', 'auto-detect']
+    }
+
+    if (mode === 'serial') {
+      const ports = Array.isArray(serialPorts) ? serialPorts : []
+      return [
+        autoDetect,
+        ...ports.map((p) => {
+          const alias = nodeAliases[p.port]
+          return {
+            value: p.port,
+            label: `${alias ? `${alias} — ` : ''}${p.port}${p.desc ? ` · ${p.desc}` : ''}`,
+            keywords: [alias ?? '', p.port, p.desc ?? '', p.hwid ?? '']
+          }
+        })
+      ]
+    }
+
+    const devices = Array.isArray(bleDevices) ? bleDevices : []
+    return [
+      autoDetect,
+      ...devices.map((d) => {
+        const alias = nodeAliases[d.address]
+        return {
+          value: d.address,
+          label: `${alias ? `${alias} — ` : ''}${d.name} (${d.address})`,
+          hint: d.rssi != null ? `${d.rssi} dBm` : undefined,
+          keywords: [alias ?? '', d.name ?? '', d.address]
+        }
+      })
+    ]
+  }, [mode, serialPorts, bleDevices, nodeAliases])
+
+  const saveAlias = async () => {
+    if (!target || target === 'auto-detect') return
+    try {
+      setNodeAliases(await window.api.setNodeAlias(target, aliasDraft))
+    } catch (err) {
+      console.error('Error saving node alias:', err)
+    }
+  }
 
   // Load recordings list
   const loadRecordings = async () => {
@@ -1410,27 +1478,55 @@ export default function App() {
                 </div>
               )}
 
-              <Select value={target} onValueChange={setTarget}>
-                <SelectTrigger className="w-full font-mono bg-background/50 h-9">
-                  <SelectValue placeholder={mode === 'serial' ? '-- Auto-detect --' : '-- Auto-detect / Scan --'} />
-                </SelectTrigger>
-                <SelectContent position="popper" className="max-h-60 overflow-y-auto">
-                  <SelectItem value="auto-detect">-- Auto-detect --</SelectItem>
-                  {mode === 'serial' ? (
-                    Array.isArray(serialPorts) && serialPorts.map((p) => (
-                      <SelectItem key={p.port} value={p.port}>
-                        {p.port} {p.desc ? ` - ${p.desc}` : ''}
-                      </SelectItem>
-                    ))
-                  ) : (
-                    Array.isArray(bleDevices) && bleDevices.map((d) => (
-                      <SelectItem key={d.address} value={d.address}>
-                        {d.name} ({d.address})
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+              <Combobox
+                value={target}
+                onValueChange={setTarget}
+                options={targetOptions}
+                placeholder={mode === 'serial' ? '-- Auto-detect --' : '-- Auto-detect / Scan --'}
+                searchPlaceholder={mode === 'serial' ? 'Filter ports…' : 'Filter by name or address…'}
+                emptyMessage={
+                  mode === 'serial'
+                    ? 'No serial port matches.'
+                    : showAllBle
+                      ? 'No BLE device matches.'
+                      : 'No PhysDAQ node matches. Try "show all BLE devices".'
+                }
+                className="font-mono bg-background/50"
+              />
+
+              {mode === 'ble' && (
+                <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={showAllBle}
+                    onChange={(e) => setShowAllBle(e.target.checked)}
+                    className="accent-primary"
+                  />
+                  Show all BLE devices (not just PhysDAQ nodes)
+                </label>
+              )}
+            </div>
+
+            {/* Friendly name for this physical node */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
+                Node Name
+              </label>
+              <div className="flex gap-2">
+                <Input
+                  type="text"
+                  value={aliasDraft}
+                  onChange={(e) => setAliasDraft(e.target.value)}
+                  onBlur={saveAlias}
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveAlias() }}
+                  disabled={!target || target === 'auto-detect'}
+                  placeholder="e.g. Node A — chest strap"
+                  className="w-full h-9 bg-background/50"
+                />
+              </div>
+              <p className="text-[10px] text-muted-foreground leading-normal">
+                Remembered for this device, so you can find it in the list next time.
+              </p>
             </div>
 
             {/* Manual Override */}
