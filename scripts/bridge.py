@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """JSON bridge for Electron interface.
 
-Reads raw serial/BLE data from the MAID wearable, processes it in real-time
+Reads raw serial/BLE data from the PhysDAQ wearable, processes it in real-time
 (Madgwick AHRS filter for 3D orientation, ZUPT drift correction, and FFT-based BPM),
 and outputs clean JSON lines to stdout for Electron.
 
@@ -374,7 +374,7 @@ def ble_reader(addr_hint):
                         await asyncio.sleep(3.0)
                         continue
                 else:
-                    sys.stderr.write("BLE: scanning for MAID wearable...\n")
+                    sys.stderr.write("BLE: scanning for PhysDAQ wearable...\n")
                     print(json.dumps({"status": "connecting"}), flush=True)
                     found = await BleakScanner.discover(timeout=4.0, service_uuids=[NUS_SERVICE_UUID])
                     if not found:

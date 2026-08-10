@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BLE NUS receiver for MAID.
+"""BLE NUS receiver for PhysDAQ.
 
 Discovers devices by NUS service UUID (not by name — name is project-specific
 and will change).  When multiple sensors are in range, shows a list and lets

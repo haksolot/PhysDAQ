@@ -1,5 +1,5 @@
 /*
- * XIAO BLE Sense overlay — MAID PPG + IMU
+ * XIAO BLE Sense overlay — PhysDAQ PPG + IMU
  *
  * I2C0 @ 0x6A : LSM6DS3TR-C IMU  (pinctrl: SDA=P0.07, SCL=P0.27; unchanged)
  * I2C1 @ 0x57 : MAX30102 PPG     (pinctrl: SDA=D4/P0.04, SCL=D5/P0.05)

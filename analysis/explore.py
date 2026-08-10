@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive data explorer for MAID sensor logs.
+"""Interactive data explorer for PhysDAQ sensor logs.
 
 Loads a raw or enriched CSV and displays linked, pannable/zoomable plots.
 Auto-detects the enriched and beats counterparts from any file in the log set.
@@ -146,7 +146,7 @@ def main():
     pg.setConfigOptions(antialias=True, background="#1e1e2e", foreground="#cdd6f4")
 
     win = QtWidgets.QWidget()
-    win.setWindowTitle(f"MAID Explorer — {label}")
+    win.setWindowTitle(f"PhysDAQ Explorer — {label}")
     win.resize(1400, 950)
 
     root = QtWidgets.QVBoxLayout(win)

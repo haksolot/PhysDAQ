@@ -2,3 +2,13 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
 *.bat text eol=crlf
+
+# CAD / 3D-print assets under hardware/ — never run these through line-ending
+# normalization, it corrupts binary meshes and Fusion archives.
+*.stl  binary
+*.step binary
+*.stp  binary
+*.f3d  binary
+*.3mf  binary
+*.obj  binary
+*.dxf  binary

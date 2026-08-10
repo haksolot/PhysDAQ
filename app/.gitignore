@@ -1,6 +1,9 @@
 node_modules
 dist
 out
+
+# Frozen Python sidecar (built by `npm run build:sidecar`)
+sidecar
 .DS_Store
 .eslintcache
 *.log*

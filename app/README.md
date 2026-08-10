@@ -1,34 +1,34 @@
-# app
+# PhysDAQ Desktop App
 
-An Electron application with React and TypeScript
+Electron + React front-end for the PhysDAQ wearable. It does not talk to the
+hardware itself — it spawns **`scripts/bridge.py`** (the *sidecar*) as a child
+process, one per connected sensor, and reads JSON lines from its stdout.
 
-## Recommended IDE Setup
-
-- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
-
-## Project Setup
-
-### Install
-
-```bash
-$ npm install
+```
+┌──────────────────────┐   spawn + stdout JSON   ┌──────────────────┐   serial / BLE
+│ Electron main        │ ──────────────────────► │ bridge (Python)  │ ◄──────────────► XIAO nRF52840
+│ src/main/sidecar.ts  │ ◄────────────────────── │ numpy · scipy    │
+└──────────────────────┘                         │ bleak · imufusion│
+                                                 └──────────────────┘
 ```
 
-### Development
+## Quick reference
 
 ```bash
-$ npm run dev
+npm install
+npm run dev         # dev server with HMR (uses the repo's .venv for the bridge)
+npm run typecheck
+npm run build:win   # or build:mac / build:linux — builds the sidecar too
 ```
 
-### Build
+The dev build needs the repo's Python venv; see the setup steps in
+[../docs/development.md](../docs/development.md).
 
-```bash
-# For windows
-$ npm run build:win
+## Full documentation
 
-# For macOS
-$ npm run build:mac
-
-# For Linux
-$ npm run build:linux
-```
+| | |
+|---|---|
+| Architecture, IPC surface, UI internals | [../docs/desktop-app.md](../docs/desktop-app.md) |
+| Setup, build chain, packaging, troubleshooting | [../docs/development.md](../docs/development.md) |
+| Bridge JSON and session CSV formats | [../docs/protocol.md](../docs/protocol.md) |
+| Using the app | [../docs/user-guide.md](../docs/user-guide.md) |

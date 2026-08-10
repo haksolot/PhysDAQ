@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: app
+appId: ca.bcit.physdaq
+productName: PhysDAQ
 directories:
   buildResources: build
 files:
@@ -11,8 +11,17 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+# The Python sidecar (PyInstaller bundle of scripts/bridge.py). Built by
+# `npm run build:sidecar` into app/sidecar/bridge/, shipped verbatim next to
+# app.asar so main/sidecar.ts finds it at <resourcesPath>/bridge/bridge[.exe].
+# Never put this inside asar — the OS cannot exec a file from an archive.
+extraResources:
+  - from: sidecar/bridge
+    to: bridge
+    filter:
+      - '**/*'
 win:
-  executableName: app
+  executableName: PhysDAQ
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
@@ -33,11 +42,8 @@ linux:
     - AppImage
     - snap
     - deb
-  maintainer: electronjs.org
-  category: Utility
+  maintainer: BCIT
+  category: Science
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
-publish:
-  provider: generic
-  url: https://example.com/auto-updates

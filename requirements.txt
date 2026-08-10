@@ -1,0 +1,26 @@
+# PhysDAQ Python dependencies
+#
+# Install into the repo venv:
+#     python -m venv .venv
+#     .venv/Scripts/python -m pip install -r requirements.txt      # Windows
+#     .venv/bin/python -m pip install -r requirements.txt          # Linux/macOS
+#
+# These are the runtime dependencies of scripts/bridge.py (the desktop app's
+# sidecar) plus the tool used to freeze it into a standalone binary.
+
+# --- sidecar runtime (scripts/bridge.py) ---
+numpy
+scipy
+pyserial
+bleak
+imufusion
+
+# --- packaging the sidecar for distribution (make sidecar) ---
+pyinstaller>=6.16
+
+# --- offline analysis / live plotting (analysis/, scripts/plotter.py) ---
+# Not needed by the desktop app; install if you use `make plot` / `make process`.
+pandas
+pyqtgraph
+PyQt6
+PyOpenGL

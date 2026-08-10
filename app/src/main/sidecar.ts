@@ -1,8 +1,14 @@
-import { spawn, exec, ChildProcess } from 'child_process'
+import { spawn, execFile, ChildProcess } from 'child_process'
 import { join } from 'path'
 import { existsSync, mkdirSync, createWriteStream, WriteStream, readdirSync, statSync, readFileSync, rmSync } from 'fs'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { is } from '@electron-toolkit/utils'
+
+// Sessions are written to Documents/PhysDAQ_Sessions. LEGACY_SESSIONS_DIR is the
+// pre-rename name (the project was called MAID); it is never written to, only
+// listed, so recordings made before the rename stay visible in the app.
+const SESSIONS_DIR = 'PhysDAQ_Sessions'
+const LEGACY_SESSIONS_DIR = 'MAID_Sessions'
 
 function getRepoRoot(): string {
   try {
@@ -30,6 +36,38 @@ function getPythonCommand(): string {
     }
   }
   return 'python'
+}
+
+// Resolve how to invoke the bridge for the current build.
+//
+//   dev         -> <venv python> scripts/bridge.py
+//   packaged    -> <resourcesPath>/bridge/bridge[.exe]  (PyInstaller bundle,
+//                  produced by `npm run build:sidecar`, placed there by the
+//                  extraResources rule in electron-builder.yml)
+//
+// Throws with an actionable message when the packaged bundle is missing —
+// otherwise the failure surfaces as an opaque shell error like
+// "'…\bridge.exe' is not recognized as an internal or external command".
+function getBridgeInvocation(): { command: string; baseArgs: string[] } {
+  if (is.dev) {
+    return {
+      command: getPythonCommand(),
+      baseArgs: [join(getRepoRoot(), 'scripts/bridge.py')]
+    }
+  }
+
+  const binName = process.platform === 'win32' ? 'bridge.exe' : 'bridge'
+  const command = join(process.resourcesPath, 'bridge', binName)
+
+  if (!existsSync(command)) {
+    throw new Error(
+      `Python sidecar not found at ${command}. ` +
+        'This build was packaged without it — rebuild with "npm run build:sidecar" ' +
+        'before "npm run build:win".'
+    )
+  }
+
+  return { command, baseArgs: [] }
 }
 
 // Build a clean environment for the spawned Python process.
@@ -97,16 +135,21 @@ export function startSidecar(mainWindow: BrowserWindow): void {
       activeSensors.delete(config.id)
     }
 
-    let command = getPythonCommand()
-    let args: string[] = []
+    let command: string
+    let args: string[]
 
-    if (is.dev) {
-      const repoRoot = getRepoRoot()
-      const bridgePath = join(repoRoot, 'scripts/bridge.py')
-      args = [bridgePath]
-    } else {
-      command = join(process.resourcesPath, 'bridge.exe')
-      args = []
+    try {
+      const invocation = getBridgeInvocation()
+      command = invocation.command
+      args = [...invocation.baseArgs]
+    } catch (err) {
+      console.error(`[Sidecar] Cannot locate bridge for ${config.id}:`, err)
+      mainWindowRef?.webContents.send('sensor-status', {
+        sensorId: config.id,
+        status: 'error',
+        error: err instanceof Error ? err.message : String(err)
+      })
+      return
     }
 
     if (config.mode === 'ble') {
@@ -124,7 +167,10 @@ export function startSidecar(mainWindow: BrowserWindow): void {
     try {
       const p = spawn(command, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: getPythonEnv()
+        env: getPythonEnv(),
+        // The frozen bridge is a console app; without this Windows flashes a
+        // console window for every sensor that connects.
+        windowsHide: true
       })
 
       activeSensors.set(config.id, {
@@ -227,7 +273,7 @@ export function startSidecar(mainWindow: BrowserWindow): void {
   // Recording IPC Handlers
   ipcMain.handle('start-recording', (_, sessionName: string) => {
     try {
-      const baseDir = join(app.getPath('documents'), 'MAID_Sessions')
+      const baseDir = join(app.getPath('documents'), SESSIONS_DIR)
       if (!existsSync(baseDir)) {
         mkdirSync(baseDir, { recursive: true })
       }
@@ -280,64 +326,77 @@ export function startSidecar(mainWindow: BrowserWindow): void {
     }
   })
 
+  // Enumerate the session folders under one base directory. Every entry carries
+  // an absolute `path`, so get-recording-data and delete-recording work the same
+  // whether the session came from the current or the legacy directory.
+  const scanSessionBase = (baseDir: string, legacy: boolean): any[] => {
+    if (!existsSync(baseDir)) return []
+
+    const dirs = readdirSync(baseDir)
+    const list: any[] = []
+
+    for (const dir of dirs) {
+      const fullPath = join(baseDir, dir)
+      const stat = statSync(fullPath)
+      if (!stat.isDirectory()) continue
+
+      const parts = dir.split('_')
+      const datePart = parts[1] || ''
+      const namePart = parts.slice(2).join('_') || 'Untitled'
+
+      const files = readdirSync(fullPath)
+      const sensorFiles: any[] = []
+      const positions: string[] = []
+      let estimatedDuration = 0
+
+      for (const file of files) {
+        if (!file.endsWith('.csv')) continue
+        const filePath = join(fullPath, file)
+        const fstat = statSync(filePath)
+        const pos = file.replace('.csv', '')
+        positions.push(pos)
+        sensorFiles.push({
+          filename: file,
+          size: fstat.size,
+          position: pos
+        })
+
+        try {
+          const dataContent = readFileSync(filePath, 'utf-8')
+          const lines = dataContent.trim().split('\n')
+          if (lines.length > 2) {
+            const lastLine = lines[lines.length - 1]
+            const elapsed = parseFloat(lastLine.split(',')[1])
+            if (!isNaN(elapsed) && elapsed > estimatedDuration) {
+              estimatedDuration = elapsed
+            }
+          }
+        } catch (e) {
+          // fallback
+        }
+      }
+
+      list.push({
+        name: namePart,
+        date: datePart,
+        path: fullPath,
+        sensors: positions,
+        duration_s: Math.round(estimatedDuration),
+        files: sensorFiles,
+        legacy
+      })
+    }
+
+    return list
+  }
+
   ipcMain.handle('get-recordings', () => {
     try {
-      const baseDir = join(app.getPath('documents'), 'MAID_Sessions')
-      if (!existsSync(baseDir)) return []
-      
-      const dirs = readdirSync(baseDir)
-      const list: any[] = []
-
-      for (const dir of dirs) {
-        const fullPath = join(baseDir, dir)
-        const stat = statSync(fullPath)
-        if (!stat.isDirectory()) continue
-
-        const parts = dir.split('_')
-        const datePart = parts[1] || ''
-        const namePart = parts.slice(2).join('_') || 'Untitled'
-        
-        const files = readdirSync(fullPath)
-        const sensorFiles: any[] = []
-        const positions: string[] = []
-        let estimatedDuration = 0
-
-        for (const file of files) {
-          if (!file.endsWith('.csv')) continue
-          const filePath = join(fullPath, file)
-          const fstat = statSync(filePath)
-          const pos = file.replace('.csv', '')
-          positions.push(pos)
-          sensorFiles.push({
-            filename: file,
-            size: fstat.size,
-            position: pos
-          })
-
-          try {
-            const dataContent = readFileSync(filePath, 'utf-8')
-            const lines = dataContent.trim().split('\n')
-            if (lines.length > 2) {
-              const lastLine = lines[lines.length - 1]
-              const elapsed = parseFloat(lastLine.split(',')[1])
-              if (!isNaN(elapsed) && elapsed > estimatedDuration) {
-                estimatedDuration = elapsed
-              }
-            }
-          } catch (e) {
-            // fallback
-          }
-        }
-
-        list.push({
-          name: namePart,
-          date: datePart,
-          path: fullPath,
-          sensors: positions,
-          duration_s: Math.round(estimatedDuration),
-          files: sensorFiles
-        })
-      }
+      const documents = app.getPath('documents')
+      const list = [
+        ...scanSessionBase(join(documents, SESSIONS_DIR), false),
+        ...scanSessionBase(join(documents, LEGACY_SESSIONS_DIR), true)
+      ]
 
       return list.sort((a, b) => b.date.localeCompare(a.date))
     } catch (err) {
@@ -458,38 +517,45 @@ app.on('will-quit', () => {
   stopSidecar()
 })
 
-export function getSerialPorts(): Promise<any[]> {
+// Run the bridge as a one-shot query (--list-ports / --scan) and return the
+// JSON array it prints. execFile (not exec) so the binary is invoked directly:
+// no shell involved, so paths containing spaces need no quoting and a missing
+// binary reports ENOENT instead of a cmd.exe parse error.
+function runBridgeQuery(queryArg: string, label: string): Promise<any[]> {
   return new Promise((resolve, reject) => {
-    let command = getPythonCommand()
-    let args: string[] = []
+    let command: string
+    let args: string[]
 
-    if (is.dev) {
-      const repoRoot = getRepoRoot()
-      args = [join(repoRoot, 'scripts/bridge.py'), '--list-ports']
-    } else {
-      command = join(process.resourcesPath, 'bridge.exe')
-      args = ['--list-ports']
+    try {
+      const invocation = getBridgeInvocation()
+      command = invocation.command
+      args = [...invocation.baseArgs, queryArg]
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)))
+      return
     }
 
-    exec(`"${command}" ${args.join(' ')}`, { env: getPythonEnv() }, (err, stdout, stderr) => {
+    execFile(command, args, { env: getPythonEnv(), windowsHide: true }, (err, stdout, stderr) => {
       const parsed = parsePythonJsonOutput(stdout)
-      if (parsed && typeof parsed === 'object' && parsed.error) {
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.error) {
         reject(new Error(parsed.error))
         return
       }
 
       if (err) {
-        console.error('[Sidecar] Failed to get serial ports:', err, stderr)
-        reject(new Error(stderr.trim() || err.message || 'Process exited with error'))
+        console.error(`[Sidecar] Failed to ${label}:`, err, stderr)
+        const detail =
+          (err as NodeJS.ErrnoException).code === 'ENOENT'
+            ? `Sidecar executable not found: ${command}`
+            : stderr.trim() || err.message || 'Process exited with error'
+        reject(new Error(detail))
         return
       }
 
-      if (parsed) {
-        if (Array.isArray(parsed)) {
-          resolve(parsed)
-        } else {
-          reject(new Error('Invalid response format received from sidecar script'))
-        }
+      if (Array.isArray(parsed)) {
+        resolve(parsed)
+      } else if (parsed) {
+        reject(new Error('Invalid response format received from sidecar script'))
       } else {
         reject(new Error('Failed to parse response from sidecar script'))
       }
@@ -497,42 +563,11 @@ export function getSerialPorts(): Promise<any[]> {
   })
 }
 
+export function getSerialPorts(): Promise<any[]> {
+  return runBridgeQuery('--list-ports', 'get serial ports')
+}
+
 export function scanBle(): Promise<any[]> {
-  return new Promise((resolve, reject) => {
-    let command = getPythonCommand()
-    let args: string[] = []
-
-    if (is.dev) {
-      const repoRoot = getRepoRoot()
-      args = [join(repoRoot, 'scripts/bridge.py'), '--scan']
-    } else {
-      command = join(process.resourcesPath, 'bridge.exe')
-      args = ['--scan']
-    }
-
-    exec(`"${command}" ${args.join(' ')}`, { env: getPythonEnv() }, (err, stdout, stderr) => {
-      const parsed = parsePythonJsonOutput(stdout)
-      if (parsed && typeof parsed === 'object' && parsed.error) {
-        reject(new Error(parsed.error))
-        return
-      }
-
-      if (err) {
-        console.error('[Sidecar] Failed to scan BLE devices:', err, stderr)
-        reject(new Error(stderr.trim() || err.message || 'Process exited with error'))
-        return
-      }
-
-      if (parsed) {
-        if (Array.isArray(parsed)) {
-          resolve(parsed)
-        } else {
-          reject(new Error('Invalid response format received from sidecar script'))
-        }
-      } else {
-        reject(new Error('Failed to parse response from sidecar script'))
-      }
-    })
-  })
+  return runBridgeQuery('--scan', 'scan BLE devices')
 }
 

@@ -1,10 +1,10 @@
 {
-  "name": "app",
+  "name": "physdaq",
   "version": "1.0.0",
-  "description": "An Electron application with React and TypeScript",
+  "description": "PhysDAQ desktop app — live acquisition and recording for the PhysDAQ wearable PPG + IMU sensor",
   "main": "./out/main/index.js",
-  "author": "example.com",
-  "homepage": "https://electron-vite.org",
+  "author": "BCIT",
+  "homepage": "https://github.com/haksolot/PhysDAQ",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
@@ -15,10 +15,11 @@
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "postinstall": "electron-builder install-app-deps",
-    "build:unpack": "npm run build && electron-builder --dir",
-    "build:win": "npm run build && electron-builder --win",
-    "build:mac": "electron-vite build && electron-builder --mac",
-    "build:linux": "electron-vite build && electron-builder --linux"
+    "build:sidecar": "node scripts/build-sidecar.mjs",
+    "build:unpack": "npm run build && npm run build:sidecar && electron-builder --dir",
+    "build:win": "npm run build && npm run build:sidecar && electron-builder --win",
+    "build:mac": "electron-vite build && npm run build:sidecar && electron-builder --mac",
+    "build:linux": "electron-vite build && npm run build:sidecar && electron-builder --linux"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

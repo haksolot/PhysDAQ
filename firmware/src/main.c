@@ -41,13 +41,13 @@ int main(void)
      * so init delays can never trip it. From here on, main() must feed it. */
     watchdog_init();
 
-    printk("\n=== MAID: PPG + IMU acquisition ===\n");
+    printk("\n=== PhysDAQ: PPG + IMU acquisition ===\n");
     printk("PPG: SpO2 mode, 100 Hz, 18-bit ADC\n");
     printk("IMU: accel [m/s^2], gyro [rad/s]\n");
-    printk("BLE: NUS advertising as MAID\n");
+    printk("BLE: NUS advertising as PhysDAQ\n");
     printk("Battery: VBAT via P0.31/AIN7, sampled every 5 s\n");
     printk("Power: sleep after %d s idle\n\n",
-           CONFIG_MAID_IDLE_TIMEOUT_SEC);
+           CONFIG_PHYSDAQ_IDLE_TIMEOUT_SEC);
 
     int64_t last_data_ms = k_uptime_get();
 

@@ -16,7 +16,7 @@
 #define MOTION_THRESH_SQ    (0.1f * 0.1f)
 #define MOTION_THRESH_MRAD  100   /* same threshold in mrad/s, for the log */
 
-#define IDLE_TIMEOUT_MS    ((int64_t)CONFIG_MAID_IDLE_TIMEOUT_SEC * 1000)
+#define IDLE_TIMEOUT_MS    ((int64_t)CONFIG_PHYSDAQ_IDLE_TIMEOUT_SEC * 1000)
 #define STATUS_INTERVAL_MS  5000  /* print idle status every 5 s */
 
 static const struct device *i2c0 = DEVICE_DT_GET(DT_NODELABEL(i2c0));
@@ -52,7 +52,7 @@ static void configure_imu_wakeup(void)
 static void enter_sleep(void)
 {
 	printk("Power: %d s idle — entering deep sleep (wake on motion)\n",
-	       CONFIG_MAID_IDLE_TIMEOUT_SEC);
+	       CONFIG_PHYSDAQ_IDLE_TIMEOUT_SEC);
 	k_sleep(K_MSEC(20));
 
 	/* Shut down BLE before System Off — the nRF BLE controller must be idle
@@ -110,7 +110,7 @@ void power_update(const struct sensor_value gyro[3])
 		struct contact_debug dbg;
 		contact_get_debug(&dbg);
 		printk("Power: idle %ds/%ds | skin: %s (dc=%d) | peak ~%dmrad/s (thresh %dmrad/s)\n",
-		       idle_s, CONFIG_MAID_IDLE_TIMEOUT_SEC, skin ? "yes" : "no",
+		       idle_s, CONFIG_PHYSDAQ_IDLE_TIMEOUT_SEC, skin ? "yes" : "no",
 		       (int)dbg.dc, peak_mrad, MOTION_THRESH_MRAD);
 		last_status_ms = now;
 		peak_mrad      = 0;

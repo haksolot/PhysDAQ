@@ -1,5 +1,5 @@
-#ifndef MAID_WATCHDOG_H
-#define MAID_WATCHDOG_H
+#ifndef PHYSDAQ_WATCHDOG_H
+#define PHYSDAQ_WATCHDOG_H
 
 /* Hardware watchdog: last-resort recovery if main() ever stops making
  * progress (e.g. an I2C transfer that blocks forever on a wedged bus).
@@ -8,4 +8,4 @@
 int watchdog_init(void);
 void watchdog_feed(void);
 
-#endif /* MAID_WATCHDOG_H */
+#endif /* PHYSDAQ_WATCHDOG_H */

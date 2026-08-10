@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-time IMU + PPG plotter for MAID wearable (Xiao BLE Sense + MAX30102).
+"""Real-time IMU + PPG plotter for PhysDAQ wearable (Xiao BLE Sense + MAX30102).
 
 Layout:
   Left top  : Gyroscope time series (GX/GY/GZ in rad/s)
@@ -8,7 +8,7 @@ Layout:
 
 Transports:
   make plot      — USB serial (auto-detect)
-  make ble-plot  — BLE NUS (discovers MAID by service UUID)
+  make ble-plot  — BLE NUS (discovers PhysDAQ by service UUID)
 
 Dependencies: pip install pyqtgraph PyQt6 pyserial imufusion PyOpenGL bleak
 NOTE: yaw drifts over time without a magnetometer — pitch/roll are stable.
@@ -484,7 +484,7 @@ def main():
     pg.setConfigOptions(antialias=True, background="#1e1e2e", foreground="#cdd6f4")
 
     win = QtWidgets.QWidget()
-    win.setWindowTitle("MAID — IMU + PPG Live")
+    win.setWindowTitle("PhysDAQ — IMU + PPG Live")
     win.resize(1400, 700)
 
     layout = QtWidgets.QHBoxLayout(win)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline processing pipeline for MAID sensor data.
+"""Offline processing pipeline for PhysDAQ sensor data.
 
 Takes a raw logger CSV and produces two enriched files:
 

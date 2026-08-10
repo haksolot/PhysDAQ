@@ -94,7 +94,7 @@ export default function App() {
 
   // Session Recording states
   const [isRecording, setIsRecording] = useState(false)
-  const [sessionName, setSessionName] = useState('MAID_Session')
+  const [sessionName, setSessionName] = useState('PhysDAQ_Session')
   const [recordingDuration, setRecordingDuration] = useState(0)
 
   // Recordings database
@@ -589,7 +589,7 @@ export default function App() {
           <Activity className="w-7 h-7 text-destructive animate-pulse" />
           <div>
             <h1 className="text-lg font-bold tracking-tight text-foreground">
-              MAID Multi-Node Network
+              PhysDAQ Multi-Node Network
             </h1>
             <p className="text-[10px] font-mono text-muted-foreground">BODY SURFACE SENSOR ARRAY INTERFACE</p>
           </div>
@@ -658,7 +658,7 @@ export default function App() {
                     RECORDING ONGOING ACROSS CONNECTED NODES
                   </span>
                 ) : (
-                  <span>Ready. Recorded CSV files save to Documents/MAID_Sessions</span>
+                  <span>Ready. Recorded CSV files save to Documents/PhysDAQ_Sessions</span>
                 )}
               </div>
             </Card>
@@ -1339,7 +1339,7 @@ export default function App() {
           <DialogHeader>
             <DialogTitle className="text-sm font-bold tracking-tight">Configure Sensor Node</DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground">
-              Map a physical MAID wear sensor module to the selected body surface position.
+              Map a physical PhysDAQ wear sensor module to the selected body surface position.
             </DialogDescription>
           </DialogHeader>
           

@@ -6,8 +6,16 @@ import eslintPluginReactHooks from 'eslint-plugin-react-hooks'
 import eslintPluginReactRefresh from 'eslint-plugin-react-refresh'
 
 export default defineConfig(
-  { ignores: ['**/node_modules', '**/dist', '**/out'] },
+  // `sidecar` is the frozen Python bundle — 100+ MB of binaries, nothing to lint.
+  { ignores: ['**/node_modules', '**/dist', '**/out', '**/sidecar'] },
   tseslint.configs.recommended,
+  {
+    // Plain Node build scripts, not app source — the TS-oriented rules don't apply.
+    files: ['scripts/**/*.mjs'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off'
+    }
+  },
   eslintPluginReact.configs.flat.recommended,
   eslintPluginReact.configs.flat['jsx-runtime'],
   {

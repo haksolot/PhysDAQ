@@ -1,8 +1,8 @@
-mainmenu "MAID Wearable"
+mainmenu "PhysDAQ Wearable"
 
 source "Kconfig.zephyr"
 
-config MAID_IDLE_TIMEOUT_SEC
+config PHYSDAQ_IDLE_TIMEOUT_SEC
 	int "Seconds of inactivity before deep sleep"
 	default 10
 	range 5 300
@@ -12,4 +12,4 @@ config MAID_IDLE_TIMEOUT_SEC
 	  (see firmware/src/contact.c) — worn but still (e.g. resting) does
 	  not trigger sleep, only set down and unworn does.
 	  Wake-up is triggered by the LSM6DS3TR-C activity interrupt on INT1.
-	  Change in prj.conf: CONFIG_MAID_IDLE_TIMEOUT_SEC=<value>
+	  Change in prj.conf: CONFIG_PHYSDAQ_IDLE_TIMEOUT_SEC=<value>

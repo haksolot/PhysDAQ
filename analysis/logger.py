@@ -7,7 +7,7 @@ Supports two transports:
 
 Usage:
     make log                       # USB serial, auto-detect port
-    make ble-log                   # BLE, discovers MAID by NUS UUID
+    make ble-log                   # BLE, discovers PhysDAQ by NUS UUID
     python analysis/logger.py [PORT]
     python analysis/logger.py --ble
 
