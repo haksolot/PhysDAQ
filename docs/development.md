@@ -222,6 +222,59 @@ they would roughly double the bundle.
 
 ---
 
+## Releasing
+
+The cross-compilation limit above is the whole reason there is a CI pipeline:
+shipping three platforms from one machine is impossible, so
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) runs the
+same `build:*` scripts on a Windows, a macOS and a Linux runner in parallel, and
+each one freezes its own sidecar.
+
+To cut a release:
+
+```bash
+# 1. bump the version in app/package.json, then
+git commit -am "chore: release v1.1.0"
+git tag v1.1.0
+git push && git push --tags
+```
+
+CI then produces four artifacts and attaches them to a **draft** release:
+
+| Platform | Artifact |
+|---|---|
+| Windows | `physdaq-<version>-setup.exe` (NSIS installer) |
+| macOS (Apple Silicon) | `physdaq-<version>-arm64.dmg` |
+| Linux | `physdaq-<version>-x86_64.AppImage` and a `.deb` |
+
+Review the artifact list, then publish the draft from the GitHub Releases page.
+The tag must match `app/package.json`'s `version` or the release job fails on
+purpose — a release labelled `v1.1.0` full of `1.0.0` artifacts is worse than no
+release. `workflow_dispatch` runs the same matrix without creating a release,
+which is the way to test a pipeline change.
+
+**What CI deliberately does not do:**
+
+- **No code signing, no notarization.** There are no certificates in this repo.
+  Windows shows a SmartScreen warning, macOS Gatekeeper refuses a double-click.
+  Both are documented for end users in [user-guide.md](user-guide.md).
+  Signing would mean adding `CSC_LINK`/`CSC_KEY_PASSWORD` (Windows) or
+  `APPLE_ID`/`APPLE_TEAM_ID`/`APPLE_APP_SPECIFIC_PASSWORD` plus `notarize: true`
+  (macOS) as repository secrets.
+- **No auto-update.** There is no `publish` block in `electron-builder.yml` and
+  no update feed; users download a new installer.
+- **No Intel macOS build.** Only `arm64`. Artifact names carry `${arch}`, so
+  adding a `macos-13` leg to the matrix would not collide.
+- **No snap.** It needs snapcraft and lxd on the runner and breaks far more
+  often than the AppImage.
+
+To build one platform by hand instead, run `make sidecar` then the matching
+`npm run build:*` on that platform — `build-sidecar.py` discards a bundle left
+over from a different OS before it starts, so a stale `bridge.exe` cannot end up
+inside a Linux package.
+
+---
+
 ## Conventions
 
 - **Line endings** are normalised to LF via `.gitattributes`, except `.ps1`/`.bat`

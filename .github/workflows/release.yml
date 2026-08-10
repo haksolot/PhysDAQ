@@ -1,0 +1,109 @@
+name: Release
+
+# PyInstaller does not cross-compile, so the Python sidecar has to be frozen on
+# the OS it will run on. Each leg of this matrix builds its own sidecar and its
+# own installer; nothing is built for a platform other than the runner's.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            script: build:win
+            artifacts: app/dist/*-setup.exe
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            script: build:mac
+            artifacts: app/dist/*.dmg
+          - name: Linux
+            os: ubuntu-latest
+            script: build:linux
+            artifacts: |
+              app/dist/*.AppImage
+              app/dist/*.deb
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.12, not the newest release: scipy and PyQt6 wheels lag behind, and
+      # requirements.txt is installed wholesale below.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      # The analysis extras (pandas, PyQt6, …) come along, which costs a minute.
+      # Duplicating the dependency list here would be worse — and bridge.spec
+      # excludes them from the frozen bundle, so artifact size is unaffected.
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Install Node dependencies
+        working-directory: app
+        run: npm ci
+
+      # typecheck -> electron-vite build -> freeze sidecar -> electron-builder
+      - name: Build
+        working-directory: app
+        run: npm run ${{ matrix.script }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # A release labelled v1.1.0 full of physdaq-1.0.0-* artifacts is worse
+      # than a failed build, so refuse the mismatch outright.
+      - name: Check the tag matches app/package.json
+        run: |
+          version=$(node -p "require('./app/package.json').version")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match app/package.json version $version." >&2
+            exit 1
+          fi
+          echo "Version $version matches tag $GITHUB_REF_NAME."
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh dist
+
+      # Draft, not published: the artifacts are unsigned, so they deserve a look
+      # before anyone downloads them.
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: true
+          generate_release_notes: true

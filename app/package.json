@@ -18,8 +18,8 @@
     "build:sidecar": "node scripts/build-sidecar.mjs",
     "build:unpack": "npm run build && npm run build:sidecar && electron-builder --dir",
     "build:win": "npm run build && npm run build:sidecar && electron-builder --win",
-    "build:mac": "electron-vite build && npm run build:sidecar && electron-builder --mac",
-    "build:linux": "electron-vite build && npm run build:sidecar && electron-builder --linux"
+    "build:mac": "npm run build && npm run build:sidecar && electron-builder --mac",
+    "build:linux": "npm run build && npm run build:sidecar && electron-builder --linux"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

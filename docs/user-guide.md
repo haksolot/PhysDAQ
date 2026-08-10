@@ -9,6 +9,31 @@ This guide assumes the hardware is already assembled. For wiring, see
 
 ---
 
+## Installing the app
+
+Download the file for your machine from the
+[Releases page](https://github.com/haksolot/PhysDAQ/releases):
+
+| Your machine | Download |
+|---|---|
+| Windows | `physdaq-<version>-setup.exe` |
+| Mac (Apple Silicon) | `physdaq-<version>-arm64.dmg` |
+| Linux | `physdaq-<version>-x86_64.AppImage`, or the `.deb` |
+
+The downloads are **not code-signed** — PhysDAQ is a lab instrument, not a
+commercial product, and a signing certificate costs money the project does not
+have. Your system will warn you the first time. This is expected:
+
+- **Windows** — SmartScreen shows "Windows protected your PC". Click
+  **More info** → **Run anyway**.
+- **macOS** — the app is blocked on a double-click. **Right-click the app →
+  Open**, then confirm. You only need to do this once.
+- **Linux** — make the AppImage executable first: `chmod +x physdaq-*.AppImage`.
+  To read a node over USB you also need to be in the `dialout` group
+  (`sudo usermod -aG dialout $USER`, then log out and back in).
+
+---
+
 ## 1. Prepare a node
 
 ### Flash the firmware

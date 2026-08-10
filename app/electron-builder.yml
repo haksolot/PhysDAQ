@@ -21,6 +21,7 @@ extraResources:
     filter:
       - '**/*'
 win:
+  target: nsis
   executableName: PhysDAQ
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
@@ -28,22 +29,26 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  target: dmg
   entitlementsInherit: build/entitlements.mac.plist
+  # Only what the app actually touches. Bluetooth is mandatory, not optional:
+  # macOS terminates a packaged app that reaches CoreBluetooth without this key,
+  # and BLE is one of the two ways a node connects. Documents is where sessions
+  # are written (Documents/PhysDAQ_Sessions).
   extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    - NSBluetoothAlwaysUsageDescription: PhysDAQ connects to sensor nodes over Bluetooth Low Energy.
+    - NSDocumentsFolderUsageDescription: PhysDAQ saves recorded sessions to your Documents folder.
   notarize: false
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
 linux:
+  # snap is deliberately absent: it needs snapcraft + lxd on the build machine
+  # and is by far the most fragile of the three targets in CI.
   target:
     - AppImage
-    - snap
     - deb
   maintainer: BCIT
   category: Science
 appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
 npmRebuild: false

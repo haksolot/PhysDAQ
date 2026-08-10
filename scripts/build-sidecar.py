@@ -29,6 +29,7 @@ SPEC = os.path.join(REPO_ROOT, "scripts", "bridge.spec")
 DIST = os.path.join(REPO_ROOT, "app", "sidecar")
 WORK = os.path.join(REPO_ROOT, "build", "pyinstaller")
 BIN_NAME = "bridge.exe" if sys.platform == "win32" else "bridge"
+FOREIGN_BIN_NAME = "bridge" if sys.platform == "win32" else "bridge.exe"
 BIN = os.path.join(DIST, "bridge", BIN_NAME)
 
 
@@ -42,12 +43,29 @@ def check_pyinstaller() -> None:
         sys.exit(1)
 
 
+def discard_foreign_bundle() -> None:
+    """Wipe a bundle left behind by a build on a different OS.
+
+    `app/sidecar/bridge/` is a single slot with no platform in its path, and
+    electron-builder copies whatever is in it. Without this, building for Linux
+    on a machine that last built for Windows ships bridge.exe inside the
+    AppImage and the installed app dies with "Python sidecar not found".
+    PyInstaller would not overwrite the foreign binary — the names differ.
+    """
+    foreign = os.path.join(DIST, "bridge", FOREIGN_BIN_NAME)
+    if os.path.exists(foreign):
+        print(f"[build-sidecar] Discarding bundle from another platform: {foreign}")
+        shutil.rmtree(os.path.join(DIST, "bridge"))
+
+
 def build(clean: bool) -> None:
     if clean:
         for path in (DIST, WORK):
             if os.path.isdir(path):
                 print(f"[build-sidecar] Removing {path}")
                 shutil.rmtree(path)
+    else:
+        discard_foreign_bundle()
 
     cmd = [
         sys.executable,
@@ -109,9 +127,10 @@ def main() -> None:
     if not args.skip_test:
         smoke_test()
 
+    target = {"win32": "build:win", "darwin": "build:mac"}.get(sys.platform, "build:linux")
     print()
     print(f"[build-sidecar] OK: {BIN}")
-    print("[build-sidecar] Now run (from app/): npm run build:win")
+    print(f"[build-sidecar] Now run (from app/): npm run {target}")
 
 
 if __name__ == "__main__":
