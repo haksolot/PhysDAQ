@@ -35,6 +35,16 @@ const api = {
   getNodeAliases: () => ipcRenderer.invoke('get-node-aliases'),
   setNodeAlias: (target: string, alias: string) =>
     ipcRenderer.invoke('set-node-alias', target, alias),
+  getFirmwareInfo: () => ipcRenderer.invoke('get-firmware-info'),
+  getBootloaderStatus: () => ipcRenderer.invoke('get-bootloader-status'),
+  flashNode: () => ipcRenderer.invoke('flash-node'),
+  onFlashProgress: (callback: (progress: any) => void) => {
+    const subscription = (_event: any, progress: any) => callback(progress)
+    ipcRenderer.on('flash-progress', subscription)
+    return () => {
+      ipcRenderer.removeListener('flash-progress', subscription)
+    }
+  },
   startRecording: (sessionName: string) => ipcRenderer.invoke('start-recording', sessionName),
   stopRecording: () => ipcRenderer.invoke('stop-recording'),
   getRecordings: () => ipcRenderer.invoke('get-recordings'),

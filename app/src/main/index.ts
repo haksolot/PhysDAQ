@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { startSidecar, getSerialPorts, scanBle } from './sidecar'
 import { getNodeAliases, setNodeAlias } from './config'
+import { flashNode, getFirmwareInfo, getBootloaderStatus } from './flasher'
 
 function createWindow(): void {
   // Create the browser window.
@@ -64,6 +65,11 @@ app.whenReady().then(() => {
   ipcMain.handle('get-node-aliases', () => getNodeAliases())
   ipcMain.handle('set-node-alias', (_, target: string, alias: string) =>
     setNodeAlias(target, alias)
+  )
+  ipcMain.handle('get-firmware-info', () => getFirmwareInfo())
+  ipcMain.handle('get-bootloader-status', () => getBootloaderStatus())
+  ipcMain.handle('flash-node', (event) =>
+    flashNode(BrowserWindow.fromWebContents(event.sender))
   )
 
   createWindow()

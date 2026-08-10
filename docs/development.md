@@ -253,6 +253,18 @@ purpose — a release labelled `v1.1.0` full of `1.0.0` artifacts is worse than 
 release. `workflow_dispatch` runs the same matrix without creating a release,
 which is the way to test a pipeline change.
 
+A `firmware` job builds `zephyr.uf2` once and hands it to all three app jobs,
+which stage it at `app/resources/firmware/physdaq.uf2` before electron-builder
+packages it as `extraResources`. That is what lets the installed app flash a node
+without a toolchain (`app/src/main/flasher.ts`). The image is hardware-specific
+rather than host-specific, so it is built once rather than per-OS, and it is also
+attached to the release for anyone who wants to flash by hand.
+
+`*.uf2` is gitignored, so a **local** `npm run build:*` bundles no firmware and
+the app's flash button reports itself unavailable — by design; only CI ships an
+image. In development the flasher instead uses `build/zephyr/zephyr.uf2`, so
+`make build` then `npm run dev` flashes what you just compiled.
+
 **What CI deliberately does not do:**
 
 - **No code signing, no notarization.** There are no certificates in this repo.

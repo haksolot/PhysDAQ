@@ -13,8 +13,43 @@ permissions:
   contents: write
 
 jobs:
+  # The app bundles a firmware image so a researcher can flash a node without a
+  # Zephyr toolchain. Built once here and handed to all three app jobs — the
+  # image is hardware-specific, not host-specific, so it does not belong in the
+  # per-OS matrix.
+  firmware:
+    name: Firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: PhysDAQ
+
+      - name: Set up Zephyr
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: PhysDAQ
+          toolchains: arm-zephyr-eabi
+
+      - name: Build firmware
+        working-directory: PhysDAQ
+        run: west build -b xiao_ble_sense firmware
+
+      - name: Stage the image under the name the app looks for
+        working-directory: PhysDAQ
+        run: |
+          mkdir -p out
+          cp build/zephyr/zephyr.uf2 out/physdaq.uf2
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: PhysDAQ/out/physdaq.uf2
+          if-no-files-found: error
+
   build:
     name: ${{ matrix.name }}
+    needs: firmware
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -59,6 +94,13 @@ jobs:
       - name: Install Node dependencies
         working-directory: app
         run: npm ci
+
+      # electron-builder ships app/resources/firmware/ as extraResources, so the
+      # image has to be in place before it packages.
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: app/resources/firmware
 
       # typecheck -> electron-vite build -> freeze sidecar -> electron-builder
       - name: Build

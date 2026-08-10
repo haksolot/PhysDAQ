@@ -10,7 +10,7 @@ import { is } from '@electron-toolkit/utils'
 const SESSIONS_DIR = 'PhysDAQ_Sessions'
 const LEGACY_SESSIONS_DIR = 'MAID_Sessions'
 
-function getRepoRoot(): string {
+export function getRepoRoot(): string {
   try {
     const appPath = app.getAppPath()
     const repoRoot = join(appPath, '..')

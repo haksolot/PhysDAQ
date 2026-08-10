@@ -55,6 +55,23 @@ The board reboots by itself as soon as the copy finishes. If the drive is not
 found, `make flash` prints the absolute path of the `.uf2` so you can drag it
 across manually.
 
+### Flashing from the desktop app
+
+The installed app carries a firmware image, so you do not need a build toolchain
+to set up a node:
+
+1. Connect the node over USB.
+2. Open a sensor slot's **Link** dialog and press **Flash this node**.
+3. **Double-tap the RST button** when prompted. The app waits up to a minute for
+   the `XIAO-SENSE` drive to appear, copies the image, and confirms.
+
+The node reboots by itself. If it is already connected in the app, the flash
+step disconnects it first — a node's serial port cannot be held open while it is
+being flashed.
+
+If you built the app from source, it flashes whatever `make build` last produced
+instead of a bundled image, and the button is disabled until you have built one.
+
 ### Check that it works
 
 ```bash
