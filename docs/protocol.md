@@ -122,10 +122,17 @@ Stock Nordic UART Service UUIDs — the device does not define custom ones:
 | TX (device → host, notify) | `6e400003-b5a3-f393-e0a9-e50e24dcca9e` |
 | RX (host → device, write w/o response) | `6e400002-b5a3-f393-e0a9-e50e24dcca9e` |
 
-The advertised name is `PhysDAQ` (`CONFIG_BT_DEVICE_NAME`), but **no host code
-matches on the name** — every Python client discovers by service UUID, which is
-advertised in the AD payload precisely so scanners can filter on it. Renaming the
-device does not break discovery.
+The advertised name is `PhysDAQ-XXXX`, where the suffix is the last two bytes of
+the SoC's factory device ID (`hwinfo_get_device_id()`), so two nodes are
+distinguishable in a scan. It is derived at boot rather than stored — this board
+has no NVS configured — and is stable across reboots and reflashes because the
+ID is burned into FICR.
+
+**No host code matches on the name.** Every Python client discovers by service
+UUID, which is advertised in the AD payload precisely so scanners can filter on
+it; `bridge.py --scan` does exactly that. Renaming the device does not break
+discovery. The desktop app can additionally attach a user-chosen alias to an
+address, but that lives host-side in `nodes.json`, not on the node.
 
 The RX characteristic is wired up and writable but its handler is currently a
 no-op, reserved for a future downlink command channel.

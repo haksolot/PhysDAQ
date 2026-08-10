@@ -5,6 +5,8 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/drivers/hwinfo.h>
+#include <string.h>
 #include "ble.h"
 
 /* NUS-compatible UUIDs — identical to Nordic UART Service, so any NUS
@@ -70,11 +72,39 @@ static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_NUS_SERVICE_VAL),
 };
 
-static const struct bt_data sd[] = {
-	BT_DATA(BT_DATA_NAME_COMPLETE,
-		CONFIG_BT_DEVICE_NAME,
-		sizeof(CONFIG_BT_DEVICE_NAME) - 1),
-};
+/* Filled in by set_unique_name() before advertising starts. Not const, and not
+ * built from CONFIG_BT_DEVICE_NAME directly: the name carries a per-chip suffix
+ * that is only known at runtime. */
+static char             adv_name[CONFIG_BT_DEVICE_NAME_MAX + 1];
+static struct bt_data   sd[1];
+
+/* Append a suffix from the factory device ID, so two nodes are distinguishable
+ * in a scan. Derived rather than stored — this board has no NVS configured, and
+ * the ID is stable across reboots and reflashes because it is burned into FICR.
+ * Falls back to the plain configured name if hwinfo is unavailable, which costs
+ * uniqueness but never prevents the node from advertising. */
+static void set_unique_name(void)
+{
+	uint8_t id[8];
+	ssize_t len = hwinfo_get_device_id(id, sizeof(id));
+
+	if (len >= 2) {
+		snprintk(adv_name, sizeof(adv_name), "%s-%02X%02X",
+			 CONFIG_BT_DEVICE_NAME, id[len - 2], id[len - 1]);
+	} else {
+		snprintk(adv_name, sizeof(adv_name), "%s", CONFIG_BT_DEVICE_NAME);
+	}
+
+	int err = bt_set_name(adv_name);
+	if (err) {
+		printk("BLE: could not set name \"%s\" (%d)\n", adv_name, err);
+	}
+
+	/* Advertise whatever the stack actually accepted, which may have been
+	 * truncated to CONFIG_BT_DEVICE_NAME_MAX. */
+	const char *name = bt_get_name();
+	sd[0] = (struct bt_data)BT_DATA(BT_DATA_NAME_COMPLETE, name, strlen(name));
+}
 
 static void mtu_exchanged(struct bt_conn *conn, uint8_t err,
 			  struct bt_gatt_exchange_params *params)
@@ -125,6 +155,9 @@ int ble_init(void)
 		return err;
 	}
 
+	/* After bt_enable(): bt_set_name() needs the stack up. */
+	set_unique_name();
+
 	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
 			      sd, ARRAY_SIZE(sd));
 	if (err) {
@@ -132,7 +165,7 @@ int ble_init(void)
 		return err;
 	}
 
-	printk("BLE: advertising as \"%s\" (NUS UUID)\n", CONFIG_BT_DEVICE_NAME);
+	printk("BLE: advertising as \"%s\" (NUS UUID)\n", bt_get_name());
 	return 0;
 }
 
