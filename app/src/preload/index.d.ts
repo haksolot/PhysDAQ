@@ -15,6 +15,19 @@ export interface BleDeviceInfo {
   rssi: number | null
 }
 
+/** The firmware image the app would flash, if it has one. */
+export interface FirmwareInfo {
+  available: boolean
+  path?: string
+  source: 'dev' | 'bundled'
+  error?: string
+}
+
+export interface FlashProgress {
+  stage: 'waiting' | 'copying' | 'done' | 'error'
+  message: string
+}
+
 export interface SidecarAPI {
   onSensorData: (callback: (data: any) => void) => () => void
   onSidecarLog: (callback: (log: any) => void) => () => void
@@ -25,6 +38,10 @@ export interface SidecarAPI {
   scanBle: (all?: boolean) => Promise<BleDeviceInfo[]>
   getNodeAliases: () => Promise<Record<string, string>>
   setNodeAlias: (target: string, alias: string) => Promise<Record<string, string>>
+  getFirmwareInfo: () => Promise<FirmwareInfo>
+  getBootloaderStatus: () => Promise<{ present: boolean; drive?: string }>
+  flashNode: () => Promise<{ success: boolean; error?: string }>
+  onFlashProgress: (callback: (progress: FlashProgress) => void) => () => void
   startRecording: (sessionName: string) => Promise<{ success: boolean; sessionPath?: string; error?: string }>
   stopRecording: () => Promise<{ success: boolean; error?: string }>
   getRecordings: () => Promise<any[]>

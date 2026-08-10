@@ -187,6 +187,49 @@ export default function App() {
     }
   }, [configureOpen, mode, showAllBle])
 
+  // Firmware flashing
+  const [firmwareInfo, setFirmwareInfo] = useState<{
+    available: boolean
+    source: 'dev' | 'bundled'
+    error?: string
+  } | null>(null)
+  const [isFlashing, setIsFlashing] = useState(false)
+  const [flashProgress, setFlashProgress] = useState<{
+    stage: 'waiting' | 'copying' | 'done' | 'error'
+    message: string
+  } | null>(null)
+
+  useEffect(() => {
+    window.api
+      .getFirmwareInfo()
+      .then(setFirmwareInfo)
+      .catch((err) => console.error('Error reading firmware info:', err))
+
+    return window.api.onFlashProgress(setFlashProgress)
+  }, [])
+
+  const handleFlash = async () => {
+    if (!configureSlot) return
+    setIsFlashing(true)
+    setFlashProgress(null)
+
+    // The node's bridge holds its serial port open; flashing over a locked port
+    // fails, so drop the connection first and give the OS a moment to release it.
+    const node = sensors[configureSlot]
+    if (node && node.status !== 'disconnected') {
+      window.api.disconnectSensor(configureSlot)
+      await new Promise((resolve) => setTimeout(resolve, 800))
+    }
+
+    try {
+      await window.api.flashNode()
+    } catch (err: any) {
+      setFlashProgress({ stage: 'error', message: err?.message ?? String(err) })
+    } finally {
+      setIsFlashing(false)
+    }
+  }
+
   // Node aliases live on disk; load once and keep the local copy in step with
   // whatever the main process returns after a write.
   useEffect(() => {
@@ -1539,6 +1582,50 @@ export default function App() {
                 placeholder="Manual Override"
                 className="font-mono w-full h-9 bg-background/50"
               />
+            </div>
+
+            {/* Firmware */}
+            <div className="flex flex-col gap-1.5 pt-3 border-t border-border/50">
+              <div className="flex justify-between items-center">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Firmware
+                </label>
+                <button
+                  onClick={handleFlash}
+                  disabled={isFlashing || !firmwareInfo?.available}
+                  className="text-[10px] text-primary hover:underline flex items-center gap-1 font-semibold focus:outline-none disabled:opacity-40 disabled:hover:no-underline disabled:cursor-not-allowed"
+                >
+                  <Cpu className={`w-2.5 h-2.5 ${isFlashing ? 'animate-pulse' : ''}`} />
+                  {isFlashing ? 'Flashing…' : 'Flash this node'}
+                </button>
+              </div>
+
+              {firmwareInfo && !firmwareInfo.available ? (
+                <p className="text-[10px] text-muted-foreground leading-normal">
+                  {firmwareInfo.error}
+                </p>
+              ) : (
+                !flashProgress && (
+                  <p className="text-[10px] text-muted-foreground leading-normal">
+                    Connect the node over USB, then press Flash and double-tap its RST
+                    button. Recording must be stopped first.
+                  </p>
+                )
+              )}
+
+              {flashProgress && (
+                <div
+                  className={`text-[11px] rounded-md p-2 leading-normal border ${
+                    flashProgress.stage === 'error'
+                      ? 'text-destructive bg-destructive/10 border-destructive/20'
+                      : flashProgress.stage === 'done'
+                        ? 'text-primary bg-primary/10 border-primary/20'
+                        : 'text-muted-foreground bg-muted/30 border-border'
+                  }`}
+                >
+                  {flashProgress.message}
+                </div>
+              )}
             </div>
           </div>
 
