@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { startSidecar, getSerialPorts, scanBle } from './sidecar'
+import { getNodeAliases, setNodeAlias } from './config'
 
 function createWindow(): void {
   // Create the browser window.
@@ -59,7 +60,11 @@ app.whenReady().then(() => {
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
   ipcMain.handle('get-serial-ports', () => getSerialPorts())
-  ipcMain.handle('scan-ble', () => scanBle())
+  ipcMain.handle('scan-ble', (_, all?: boolean) => scanBle(all))
+  ipcMain.handle('get-node-aliases', () => getNodeAliases())
+  ipcMain.handle('set-node-alias', (_, target: string, alias: string) =>
+    setNodeAlias(target, alias)
+  )
 
   createWindow()
 

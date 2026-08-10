@@ -87,6 +87,10 @@ that symbol is Nordic Connect SDK-only and does not exist in plain Zephyr.
 
 - Advertises the 128-bit service UUID in the AD payload and the device name in
   the scan response, so hosts can filter by UUID.
+- Names itself `PhysDAQ-XXXX` at boot from the factory device ID, so a scan can
+  tell two nodes apart. Needs `CONFIG_BT_DEVICE_NAME_DYNAMIC` and
+  `CONFIG_HWINFO`; if hwinfo fails it falls back to the plain configured name
+  rather than refusing to advertise.
 - Requests an MTU exchange on connect and logs the negotiated value.
 - `ble_send()` chunks payloads by `MTU − 3` (clamped to 20–244 bytes) and drops
   the remainder on `-ENOMEM` rather than blocking the acquisition loop.

@@ -83,25 +83,39 @@ if "--list-ports" in sys.argv:
     print(json.dumps(out))
     sys.exit(0)
 
-if "--scan" in sys.argv:
+if "--scan" in sys.argv or "--scan-all" in sys.argv:
     import asyncio
     from bleak import BleakScanner
     NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
-    
+
+    # Nodes advertise the NUS UUID in the AD payload precisely so scanners can
+    # filter on it (firmware/src/ble.c). Without this an unfiltered discover()
+    # returns every phone and pair of headphones in the room, which buries the
+    # handful of entries that are actually ours. --scan-all skips the filter, as
+    # an escape hatch if an advertisement ever arrives truncated.
+    SCAN_ALL = "--scan-all" in sys.argv
+
     async def run_scan():
         try:
-            devices = await BleakScanner.discover(timeout=3.0)
+            found = await BleakScanner.discover(timeout=3.0, return_adv=True)
             out = []
-            for d in devices:
+            for device, adv in found.values():
+                uuids = [u.lower() for u in (adv.service_uuids or [])]
+                if not SCAN_ALL and NUS_SERVICE_UUID not in uuids:
+                    continue
                 out.append({
-                    "address": d.address,
-                    "name": d.name or "Unknown Device"
+                    "address": device.address,
+                    "name": adv.local_name or device.name or "Unknown Device",
+                    "rssi": adv.rssi,
                 })
+            # Strongest signal first — the node in your hand is the one you are
+            # most likely about to configure.
+            out.sort(key=lambda d: d["rssi"] if d["rssi"] is not None else -999, reverse=True)
             print(json.dumps(out))
         except Exception as err:
             print(json.dumps({"error": str(err)}))
         sys.exit(0)
-        
+
     try:
         asyncio.run(run_scan())
     except Exception as e:

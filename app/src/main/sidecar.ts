@@ -567,7 +567,12 @@ export function getSerialPorts(): Promise<any[]> {
   return runBridgeQuery('--list-ports', 'get serial ports')
 }
 
-export function scanBle(): Promise<any[]> {
-  return runBridgeQuery('--scan', 'scan BLE devices')
+/** Scan for nodes. `all` drops the NUS service-UUID filter and returns every
+ * BLE advertiser in range — the escape hatch for a node whose advertisement
+ * arrives without the UUID. */
+export function scanBle(all = false): Promise<any[]> {
+  return all
+    ? runBridgeQuery('--scan-all', 'scan all BLE devices')
+    : runBridgeQuery('--scan', 'scan BLE devices')
 }
 
