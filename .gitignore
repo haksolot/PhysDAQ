@@ -1,5 +1,8 @@
 # Build artifacts
-build/
+# Anchored: unanchored `build/` also swallowed app/build/, which is
+# electron-builder's buildResources directory (icons, mac entitlements) and has
+# to be tracked. The app's own outputs are ignored by app/.gitignore.
+/build/
 *.uf2
 
 # Zephyr workspace (auto-populated by west)
