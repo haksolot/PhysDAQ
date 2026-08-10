@@ -12,7 +12,11 @@ function createWindow(): void {
     show: false,
     title: 'PhysDAQ',
     autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    // Set on every platform, not just Linux: without it the Windows title bar
+    // and taskbar fall back to the stock Electron icon during `npm run dev`,
+    // since only the packaged .exe carries build/icon.ico. macOS ignores this
+    // and takes its dock icon from the bundle.
+    icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false

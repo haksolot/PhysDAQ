@@ -10,7 +10,7 @@ UF2   := $(BUILD)/zephyr/zephyr.uf2
 # Checks .venv/Scripts/python.exe (Windows), then .venv/bin/python (Unix), then system python.
 PYTHON := $(or $(wildcard .venv/Scripts/python.exe),$(wildcard .venv/bin/python),python)
 
-.PHONY: all help setup build rebuild flash term plot log process explore ble-log ble-plot sidecar clean env
+.PHONY: all help setup build rebuild flash term plot log process explore ble-log ble-plot sidecar icons clean env
 
 all: build
 
@@ -29,6 +29,7 @@ help:
 	@echo "  make ble-log   Record PPG+IMU via BLE (wireless)"
 	@echo "  make ble-plot  Live plot via BLE (wireless)"
 	@echo "  make sidecar   Freeze scripts/bridge.py into app/sidecar/ for the desktop app"
+	@echo "  make icons     Regenerate the desktop app icons from the project mark (requires Pillow)"
 	@echo "  make clean   Remove build directory"
 	@echo "  make env     Show environment setup hints"
 	@echo ""
@@ -82,6 +83,9 @@ endif
 
 sidecar:
 	@PYTHONPATH= $(PYTHON) scripts/build-sidecar.py $(if $(CLEAN),--clean,)
+
+icons:
+	@PYTHONPATH= $(PYTHON) scripts/make-icons.py
 
 clean:
 	@$(PYTHON) -c "import shutil, os; shutil.rmtree('$(BUILD)') if os.path.isdir('$(BUILD)') else print('Nothing to clean.')"

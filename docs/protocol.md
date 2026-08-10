@@ -13,6 +13,44 @@ format the offline pipeline consumes.
 
 ---
 
+## The chain
+
+```
+ ┌─────────────────────────────────────────────────────────────────┐
+ │  SENSOR NODE                    Zephyr RTOS 3.6 · nRF52840      │
+ │  MAX30102 (PPG, I2C1)  ──┐                                      │
+ │  LSM6DS3TR-C (IMU, I2C0) ─┴─►  100 Hz acquisition loop           │
+ └──────────────┬──────────────────────────┬───────────────────────┘
+                │ USB CDC ACM @115200      │ BLE — Nordic UART Service
+                │ (100 Hz)                 │ (rate-limited to ~25 Hz)
+                └────────────┬─────────────┘
+                             ▼   ASCII lines: "PPG red=… ir=… | IMU ax=… …"
+ ┌─────────────────────────────────────────────────────────────────┐
+ │  BRIDGE (scripts/bridge.py)                       Python + DSP  │
+ │  parse · AHRS fusion (+ZUPT) · FFT heart rate · PPG band-pass    │
+ └─────────────────────────────┬───────────────────────────────────┘
+                               ▼   JSON lines on stdout
+ ┌─────────────────────────────────────────────────────────────────┐
+ │  DESKTOP APP (app/)                    Electron · React · Vite   │
+ │  body map · live charts · 3D orientation · session recording     │
+ └─────────────────────────────┬───────────────────────────────────┘
+                               ▼   CSV per node, per session
+ ┌─────────────────────────────────────────────────────────────────┐
+ │  OFFLINE ANALYSIS (analysis/)         motion cancellation ·      │
+ │  beat detection · HRV (RMSSD) · SpO2 · interactive explorer      │
+ └─────────────────────────────────────────────────────────────────┘
+```
+
+> **No mesh.** Nodes do not talk to each other. Each one is an independent BLE
+> peripheral / USB CDC device; the multi-node aggregation happens entirely on the
+> host, one bridge process per node.
+
+The bridge is shipped two ways: run straight from source during development, and
+frozen with PyInstaller into a standalone binary for installed copies of the app,
+so end users never install Python.
+
+---
+
 ## 1. Device → host: ASCII line protocol
 
 Both transports carry **exactly the same** newline-delimited ASCII. The BLE path

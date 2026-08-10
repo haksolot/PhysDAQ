@@ -12,3 +12,8 @@
 *.3mf  binary
 *.obj  binary
 *.dxf  binary
+
+# Desktop-app icons (app/build/, app/resources/) — same reason.
+*.png  binary
+*.ico  binary
+*.icns binary

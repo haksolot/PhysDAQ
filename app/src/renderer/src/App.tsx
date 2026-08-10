@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { RealTimeChart } from './components/RealTimeChart'
 import { BoardVisualizer } from './components/BoardVisualizer'
+import { PhysDaqMark } from './components/PhysDaqMark'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -23,9 +24,8 @@ import { Input } from '@/components/ui/input'
 import { 
   Heart, 
   Bluetooth, 
-  Usb, 
-  Activity, 
-  Battery as BatteryIcon, 
+  Usb,
+  Battery as BatteryIcon,
   Fingerprint, 
   WifiOff, 
   Cpu, 
@@ -586,10 +586,10 @@ export default function App() {
       {/* ── HEADER ── */}
       <header className="flex items-center justify-between px-6 py-4 bg-card/80 border-b border-border backdrop-blur-md z-10">
         <div className="flex items-center gap-3">
-          <Activity className="w-7 h-7 text-destructive animate-pulse" />
+          <PhysDaqMark className="w-7 h-7 text-destructive animate-pulse" />
           <div>
             <h1 className="text-lg font-bold tracking-tight text-foreground">
-              PhysDAQ Multi-Node Network
+              PhysDAQ
             </h1>
             <p className="text-[10px] font-mono text-muted-foreground">BODY SURFACE SENSOR ARRAY INTERFACE</p>
           </div>
