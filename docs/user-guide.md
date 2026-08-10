@@ -14,11 +14,16 @@ This guide assumes the hardware is already assembled. For wiring, see
 Download the file for your machine from the
 [Releases page](https://github.com/haksolot/PhysDAQ/releases):
 
-| Your machine | Download |
-|---|---|
-| Windows | `physdaq-<version>-setup.exe` |
-| Mac (Apple Silicon) | `physdaq-<version>-arm64.dmg` |
-| Linux | `physdaq-<version>-x86_64.AppImage`, or the `.deb` |
+| Your machine | Download | Available |
+|---|---|---|
+| Windows | `physdaq-<version>-setup.exe` | yes |
+| Mac (Apple Silicon) | `physdaq-<version>-arm64.dmg` | not yet |
+| Linux | `physdaq-<version>-x86_64.AppImage`, or the `.deb` | not yet |
+
+Only the Windows installer is published so far. The Mac and Linux builds are
+wired up in CI but have not been through a successful run yet — until they are,
+run the app from source on those platforms
+([development.md](development.md)).
 
 The downloads are **not code-signed** — PhysDAQ is a lab instrument, not a
 commercial product, and a signing certificate costs money the project does not
