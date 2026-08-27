@@ -31,20 +31,27 @@ jobs:
           app-path: PhysDAQ
           toolchains: arm-zephyr-eabi
 
-      - name: Build firmware
+      - name: Build node firmware
         working-directory: PhysDAQ
-        run: west build -b xiao_ble_sense firmware
+        run: west build -b xiao_ble_sense -d build firmware
 
-      - name: Stage the image under the name the app looks for
+      # Separate build directory, matching `make hub`. Sharing one would force
+      # a pristine reconfigure on every switch between the two applications.
+      - name: Build hub firmware
+        working-directory: PhysDAQ
+        run: west build -b xiao_ble_sense -d build-hub firmware-hub
+
+      - name: Stage the images under the names the app looks for
         working-directory: PhysDAQ
         run: |
           mkdir -p out
           cp build/zephyr/zephyr.uf2 out/physdaq.uf2
+          cp build-hub/zephyr/zephyr.uf2 out/physdaq-hub.uf2
 
       - uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: PhysDAQ/out/physdaq.uf2
+          path: PhysDAQ/out/*.uf2
           if-no-files-found: error
 
   build:

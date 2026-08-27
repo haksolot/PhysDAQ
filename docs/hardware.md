@@ -3,6 +3,10 @@
 Everything about the physical PhysDAQ node: what it is made of, how it is wired,
 how each sensor is configured, and how it manages power.
 
+This document covers the **single-PPG node**. The hub — two PPG sensors behind an
+I2C mux, plus a microSD card on SPI — is a different board build with a different
+pin map; see [firmware-hub.md](firmware-hub.md#wiring).
+
 ---
 
 ## Bill of materials
@@ -71,6 +75,41 @@ vendored Zephyr tree.
 `i2c1` is the external connector bus; its pin control is defined in
 `xiao_ble-pinctrl.dtsi`. The MAX30102 node is added in
 `firmware/boards/xiao_ble_sense.overlay` at standard bit rate (100 kHz).
+
+### Wiring
+
+Five conductors leave the XIAO for the PPG module. Everything else in this
+picture is already on the board.
+
+```mermaid
+flowchart LR
+  subgraph XIAO["XIAO nRF52840 Sense"]
+    direction TB
+    I2C1["i2c1 · D4 P0.04 SDA<br/>D5 P0.05 SCL<br/>100 kHz"]
+    INT["D1 · P0.03<br/>GPIO in, pull-up<br/>falling edge"]
+    RAIL["3V3 · GND"]
+    I2C0["i2c0 · P0.07 / P0.27<br/>internal, 400 kHz"]
+    ADC["P0.31 / AIN7<br/>gated by P0.14"]
+  end
+
+  PPG["MAXREFDES117#<br/>MAX30102 @ 0x57"]
+  IMU["LSM6DS3TR-C @ 0x6A<br/>onboard"]
+  BAT["LiPo cell<br/>1 MΩ / 510 kΩ divider"]
+
+  I2C1 --> PPG
+  RAIL --> PPG
+  PPG -. "PPG_RDY, active low" .-> INT
+  I2C0 --> IMU
+  IMU -. "INT1 · P0.11<br/>wake-on-motion" .-> XIAO
+  BAT --> ADC
+```
+
+> ⚠️ **D4 = P0.04, D5 = P0.05.** Not P0.26/P0.27 — P0.26 is the onboard red LED.
+> This is the single most common bring-up error on this board.
+
+The PPG module has no enable pin, so its rail is always live; low power is
+`MODE_CONFIG = 0x80` (SHDN) over I2C. D0 / P0.02 is consequently unused on the
+node.
 
 ---
 
@@ -161,9 +200,25 @@ Source: `firmware/src/battery.c`. The overlay declares the `battery_divider`
 ## Power management
 
 The firmware enters **nRF System Off** (~0.4 µA) after a configurable period of
-inactivity. "Inactivity" means **both** no gyroscope motion **and** no IR
-contact — so wearing the device while sitting perfectly still (resting, sleeping)
-does *not* trigger sleep. Only setting it down and leaving it unworn does.
+inactivity. "Inactivity" means **all three** of: no gyroscope motion, no IR
+contact, and **no BLE link** — so wearing the device while sitting perfectly
+still (resting, sleeping) does *not* trigger sleep, and neither does a node
+sitting on the bench with the desktop app connected to it. Only setting it down,
+unworn and unconnected, does.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Awake
+  Awake --> Awake: motion, or skin contact,<br/>or BLE connected — timer resets
+  Awake --> Sleeping: none of the three<br/>for IDLE_TIMEOUT_SEC
+  Sleeping --> Awake: IMU INT1 asserts (~125 mg)<br/>GPIO DETECT → full CPU reset
+  note right of Sleeping
+    System Off, ~0.4 µA
+    No state survives.
+    USB CDC port disappears.
+  end note
+```
 
 ### Contact detection
 
@@ -185,7 +240,7 @@ The threshold is deliberately the same number as `CONTACT_IR_MIN` in
 
 ### Sleep sequence
 
-1. No gyro motion above 0.1 rad/s **and** no IR contact for
+1. No gyro motion above 0.1 rad/s, no IR contact, **and** no BLE link, all for
    `CONFIG_PHYSDAQ_IDLE_TIMEOUT_SEC` seconds.
 2. BLE is stopped (`ble_stop()`) — the controller must be idle before System Off.
 3. MAX30102 is put in SHDN mode (LEDs off, ~0.7 µA, I2C still alive).
@@ -215,9 +270,9 @@ Valid range is 5–300 s (enforced in `firmware/Kconfig`). No source changes are
 needed. Because this is a Kconfig symbol, use `make rebuild` rather than
 `make build` if you have just renamed or added symbols.
 
-While awake and idle, a status line is printed every 5 s so you can watch the
-countdown:
+While awake and idle, a status line goes out every 5 s — to the USB console
+*and* over BLE — so you can watch the countdown:
 
 ```
-Power: idle 4s/10s | skin: yes (dc=29050) | peak ~12mrad/s (thresh 100mrad/s)
+Power: idle 4s/10s | skin: yes (dc=29050) | ble: no | peak ~12mrad/s (thresh 100mrad/s)
 ```

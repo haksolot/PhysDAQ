@@ -20,10 +20,12 @@ extraResources:
     to: bridge
     filter:
       - '**/*'
-  # Firmware image for in-app flashing, produced by the CI firmware job. Kept
+  # Firmware images for in-app flashing, produced by the CI firmware job. Kept
   # out of asar for symmetry with the sidecar and so main/flasher.ts can resolve
-  # it at <resourcesPath>/firmware/physdaq.uf2. A local build has no image here
-  # (*.uf2 is gitignored) and the flash button reports itself unavailable.
+  # them at <resourcesPath>/firmware/physdaq.uf2 and physdaq-hub.uf2. Both
+  # applications run on the same board, so the operator picks which to flash.
+  # A local build has no images here (*.uf2 is gitignored) and the flash button
+  # reports itself unavailable.
   - from: resources/firmware
     to: firmware
     filter:

@@ -24,12 +24,21 @@ const api = {
       ipcRenderer.removeListener('sensor-status', subscription)
     }
   },
-  connectSensor: (config: { id: string; mode: 'serial' | 'ble'; target: string; position: string }) => {
+  connectSensor: (config: {
+    id: string
+    mode: 'serial' | 'ble'
+    target: string
+    position: string
+    deviceType?: 'node' | 'hub'
+    channelSlots?: string[]
+  }) => {
     ipcRenderer.send('connect-sensor', config)
   },
   disconnectSensor: (id: string) => {
     ipcRenderer.send('disconnect-sensor', id)
   },
+  sendDeviceCommand: (id: string, cmd: Record<string, unknown>) =>
+    ipcRenderer.invoke('send-device-command', id, cmd),
   getSerialPorts: () => ipcRenderer.invoke('get-serial-ports'),
   scanBle: (all?: boolean) => ipcRenderer.invoke('scan-ble', all),
   getNodeAliases: () => ipcRenderer.invoke('get-node-aliases'),
@@ -37,7 +46,7 @@ const api = {
     ipcRenderer.invoke('set-node-alias', target, alias),
   getFirmwareInfo: () => ipcRenderer.invoke('get-firmware-info'),
   getBootloaderStatus: () => ipcRenderer.invoke('get-bootloader-status'),
-  flashNode: () => ipcRenderer.invoke('flash-node'),
+  flashNode: (image?: 'node' | 'hub') => ipcRenderer.invoke('flash-node', image ?? 'node'),
   onFlashProgress: (callback: (progress: any) => void) => {
     const subscription = (_event: any, progress: any) => callback(progress)
     ipcRenderer.on('flash-progress', subscription)

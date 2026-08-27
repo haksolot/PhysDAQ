@@ -7,6 +7,28 @@ This guide assumes the hardware is already assembled. For wiring, see
 [hardware.md](hardware.md); for building from source, see
 [development.md](development.md).
 
+There are two kinds of device. A **node** carries one PPG sensor and occupies one
+body position. A **hub** carries two PPG sensors, occupies two body positions from
+a single connection, and records to its own microSD card as well as streaming.
+Everything below applies to both unless it says otherwise.
+
+```mermaid
+flowchart TB
+  A(["Assembled device"]) --> B{"Node or hub?"}
+  B -- node --> C["Flash physdaq.uf2<br/>make build, or from the app"]
+  B -- hub --> D["Flash physdaq-hub.uf2<br/>make hub, or from the app"]
+  C & D --> E{"Transport?"}
+  E -- "USB · 100 Hz" --> F["Full rate — use this<br/>when sample rate matters"]
+  E -- "BLE · ~25 Hz" --> G["Untethered monitoring<br/>and live display"]
+  F & G --> H{"Hub?"}
+  H -- no --> I["Assign 1 body position"]
+  H -- yes --> J["Assign 2 body positions"]
+  I & J --> K["Wear · check contact turns emerald"]
+  K --> L["Name the session · Record"]
+  L --> M["Review in-app<br/>Session Database"]
+  L --> N["Offline pipeline<br/>needs make log, not the app's CSV"]
+```
+
 ---
 
 ## Installing the app
@@ -60,17 +82,24 @@ across manually.
 The installed app carries a firmware image, so you do not need a build toolchain
 to set up a node:
 
-1. Connect the node over USB.
-2. Open a sensor slot's **Link** dialog and press **Flash this node**.
+1. Connect the device over USB.
+2. Open a sensor slot's **Link** dialog, set **Device Type**, and press
+   **Flash node firmware** or **Flash hub firmware**.
 3. **Double-tap the RST button** when prompted. The app waits up to a minute for
    the `XIAO-SENSE` drive to appear, copies the image, and confirms.
 
-The node reboots by itself. If it is already connected in the app, the flash
-step disconnects it first — a node's serial port cannot be held open while it is
-being flashed.
+The device reboots by itself. If it is already connected in the app, the flash
+step disconnects it first — a serial port cannot be held open while the device
+behind it is being flashed.
 
-If you built the app from source, it flashes whatever `make build` last produced
-instead of a bundled image, and the button is disabled until you have built one.
+> **The Device Type selector decides which image is written**, and nothing checks
+> it against the board. Both images run on the same hardware, so flashing node
+> firmware onto a hub succeeds and silently gives you one sensor and no card.
+> Confirm the selector before flashing.
+
+If you built the app from source, it flashes whatever you last compiled —
+`make build` for a node, `make hub` for a hub — and the button is disabled until
+the matching image exists.
 
 ### Check that it works
 
@@ -81,14 +110,21 @@ make term
 You should see the boot banner followed by a stream of sample lines:
 
 ```
+ID model=node proto=2 fw=1.2.0 ppg=1 sd=0 name=PhysDAQ-FDF9
 === PhysDAQ: PPG + IMU acquisition ===
 PPG: SpO2 mode, 100 Hz, 18-bit ADC
 IMU: accel [m/s^2], gyro [rad/s]
 BLE: NUS advertising as PhysDAQ
+Battery: VBAT via P0.31/AIN7, sampled every 5 s
+Power: sleep after 10 s idle
 ...
 PPG red=28451 ir=29033 | IMU ax=0.213 ay=-9.706 az=0.884 gx=0.001 gy=-0.004 gz=0.002
 Battery: 71% (3940 mV)
 ```
+
+The first line is the device identifying itself — `model=node` or `model=hub`,
+and `ppg=` how many sensors it carries. It is the quickest way to confirm you
+flashed the image you meant to.
 
 With nothing touching the sensor, `ir` reads a few hundred. Place a fingertip on
 the PPG window and it jumps to ~29 000 — that is the contact threshold the whole
@@ -121,14 +157,31 @@ chest, wrist ×2, finger ×2, ankle ×2 — to open the *Configure Sensor Node*
 dialog.
 
 1. Choose the transport: **USB Serial** or **BLE NUS**. The dialog scans
-   automatically on open and whenever you switch transport.
+   automatically on open and whenever you switch transport. Positions default to
+   BLE, except *chest*, which defaults to USB.
 2. Pick the discovered port or device from the list, or leave it on
-   *auto-detect*. A manual override field is there if a device does not appear.
-3. Confirm. The marker turns amber (connected, not worn) and then emerald once
+   *auto-detect*. A manual override field is there if a device does not appear,
+   and **Show all BLE devices** drops the PhysDAQ filter if a node advertises
+   without its service UUID. Hubs are badged **HUB** in the list.
+3. Set **Device Type** — `Node · 1 PPG` or `Hub · 2 PPG + SD`. A hub advertises
+   its type, so this is usually pre-selected; set it by hand for a device
+   connected over USB or running older firmware. It also decides which firmware
+   image the Flash button writes.
+4. For a hub, pick a **Second PPG Position**. The hub then occupies two body
+   positions from one connection and writes two CSVs. Leaving it unset is
+   allowed — the second sensor is still acquired and still logged to the hub's
+   card, but it is not charted and not written to a session CSV.
+5. Optionally give the device a **Node Name**; it is remembered across sessions.
+6. Confirm. The marker turns amber (connected, not worn) and then emerald once
    skin contact is detected.
 
-Repeat for each node. There is no limit imposed by the app; each connection is an
+Repeat for each device. There are eight body positions in total, and a hub
+consumes two of them — so four hubs fill the map. Each connection is an
 independent process.
+
+A hub's two positions are badged **HUB·S0** and **HUB·S1** in the inventory.
+They share one battery, one radio link and one IMU, so orientation, battery and
+link status are identical on both; only the PPG differs.
 
 **Marker colours**
 
@@ -173,8 +226,9 @@ is no contact or no confident estimate.
 2. Press **Record**. A `mm:ss` timer starts.
 3. Press **Stop** when finished.
 
-All currently connected nodes are recorded, one CSV per node, sharing a common
-session start time.
+All currently connected devices are recorded, sharing a common session start
+time. There is one CSV **per body position**, not per device — so a hub occupying
+two positions writes two files, one per sensor.
 
 **Where files go:**
 
@@ -185,9 +239,13 @@ Documents/PhysDAQ_Sessions/session_<date>_<name>/
     ...
 ```
 
-Only nodes connected **at the moment you press Record** are included — connecting
-another one mid-session does not add it. Stop and restart if you need to change
-the set.
+Only devices connected **at the moment you press Record** are included —
+connecting another one mid-session does not add it. Stop and restart if you need
+to change the set.
+
+This is the app's own recording, on the host. A hub can *also* record to its own
+card at the same time, started separately from the Hub Storage panel; the two are
+independent.
 
 Columns are documented in [protocol.md](protocol.md#3-app--disk-session-csv).
 
@@ -197,6 +255,9 @@ Columns are documented in [protocol.md](protocol.md#3-app--disk-session-csv).
 
 The **Session Database** page lists every saved session with its date, duration
 and node count.
+
+> A `hub_downloads` folder sits alongside the sessions — it holds raw `.BIN`
+> files pulled off a hub's card, and is skipped by this list.
 
 Select a session, then a node's CSV, to load it into the timeline scrubber:
 
@@ -213,6 +274,55 @@ immediate and not undoable.
 > Sessions recorded before the project was renamed from MAID still appear here.
 > They are read from `Documents/MAID_Sessions` and remain fully usable; new
 > recordings always go to `PhysDAQ_Sessions`.
+
+---
+
+## Working with a hub
+
+A hub's Node Detail page carries two extra panels. Both are reachable from either
+of its two body positions — they act on the device, not the slot.
+
+### Hub Storage
+
+Shows the card's used and total space, whether a session is currently open, and
+the running counters for records written, dropped and errored. `dropped` should
+be zero; anything else means the card could not keep up.
+
+- **New session** starts a recording on the card, **Stop session** ends it. This
+  is the hub's own recording and is independent of the app's Record button — you
+  can run either, both, or neither.
+- Each file on the card can be **downloaded** or deleted. Downloads land in
+  `Documents/PhysDAQ_Sessions/hub_downloads/`.
+- **Erase card** removes every session file. It requires typing `ERASE` to
+  confirm, and it deliberately does *not* reformat — anything the firmware did
+  not write is left untouched.
+
+> **Downloads share the radio link with the live stream.** A one-hour session is
+> roughly 11 MB, which is about 50 minutes over BLE and 20 over USB. The panel
+> shows an estimate before you start. Prefer USB, and expect the live view to
+> slow down during a transfer.
+
+> **Nothing in this project reads a downloaded `.BIN` yet.** The files are a raw
+> deliverable for now — the offline pipeline cannot open them. See
+> [roadmap.md](roadmap.md).
+
+### Satellites
+
+A hub remembers a roster of up to eight other nodes, each with an address and a
+short label.
+
+> **This is configuration only.** The hub does not scan for these nodes, connect
+> to them, or record anything from them — the roster is remembered for a future
+> capability that is **not implemented**. Adding an entry changes nothing about
+> what gets captured today. The panel says so permanently, and it is worth
+> repeating: if you want a second node's data, connect it to the app as its own
+> device.
+
+### Sleep
+
+A hub does **not** deep-sleep — the feature is compiled out. The idle timeout and
+wake-on-motion behaviour described under *Battery and sleep* below applies to
+single-PPG nodes only. A hub stays awake until it loses power.
 
 ---
 
@@ -234,6 +344,9 @@ make explore FILE=logs/<file>.csv     # interactive viewer
 ---
 
 ## Battery and sleep
+
+> This section describes the **single-PPG node**. A hub has deep sleep disabled
+> and never enters it.
 
 A node reports its charge every 5 s; the app shows it on the node's detail page.
 

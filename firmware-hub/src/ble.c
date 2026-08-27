@@ -1,0 +1,269 @@
+#include <zephyr/kernel.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/drivers/hwinfo.h>
+#include <string.h>
+#include "ble.h"
+#include "ppg.h"
+#include "command.h"
+
+/* NUS-compatible UUIDs — identical to Nordic UART Service, so any NUS
+ * client (bleak, nRF Connect app) works without any extra configuration. */
+#define BT_UUID_NUS_SERVICE_VAL \
+	BT_UUID_128_ENCODE(0x6e400001, 0xb5a3, 0xf393, 0xe0a9, 0xe50e24dcca9e)
+#define BT_UUID_NUS_TX_VAL \
+	BT_UUID_128_ENCODE(0x6e400003, 0xb5a3, 0xf393, 0xe0a9, 0xe50e24dcca9e)
+#define BT_UUID_NUS_RX_VAL \
+	BT_UUID_128_ENCODE(0x6e400002, 0xb5a3, 0xf393, 0xe0a9, 0xe50e24dcca9e)
+
+#define BT_UUID_NUS_SERVICE BT_UUID_DECLARE_128(BT_UUID_NUS_SERVICE_VAL)
+#define BT_UUID_NUS_TX      BT_UUID_DECLARE_128(BT_UUID_NUS_TX_VAL)
+#define BT_UUID_NUS_RX      BT_UUID_DECLARE_128(BT_UUID_NUS_RX_VAL)
+
+static struct bt_conn              *current_conn;
+static bool                         notify_enabled;
+static struct bt_gatt_exchange_params mtu_params;
+
+static void tx_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	notify_enabled = (value == BT_GATT_CCC_NOTIFY);
+}
+
+static ssize_t on_rx_write(struct bt_conn *conn,
+			   const struct bt_gatt_attr *attr,
+			   const void *buf, uint16_t len,
+			   uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(conn); ARG_UNUSED(attr);
+	ARG_UNUSED(offset); ARG_UNUSED(flags);
+
+	/* Hand the bytes straight to the command module, which assembles lines
+	 * and queues complete ones. Nothing here parses or touches the file
+	 * system: this runs in the BLE stack's context, where blocking on a
+	 * card doing wear-levelling would stall the radio. */
+	command_feed((const uint8_t *)buf, len);
+	return len;
+}
+
+/* GATT service attribute table.  Indices matter for ble_send():
+ * [0] Primary service
+ * [1] TX characteristic declaration
+ * [2] TX characteristic value  ← bt_gatt_notify() target
+ * [3] TX CCC descriptor        (subscribe/unsubscribe)
+ * [4] RX characteristic declaration
+ * [5] RX characteristic value  */
+BT_GATT_SERVICE_DEFINE(nus_svc,
+	BT_GATT_PRIMARY_SERVICE(BT_UUID_NUS_SERVICE),
+
+	BT_GATT_CHARACTERISTIC(BT_UUID_NUS_TX,
+			       BT_GATT_CHRC_NOTIFY,
+			       BT_GATT_PERM_NONE,
+			       NULL, NULL, NULL),
+	BT_GATT_CCC(tx_ccc_changed,
+		    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+
+	BT_GATT_CHARACTERISTIC(BT_UUID_NUS_RX,
+			       BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+			       BT_GATT_PERM_WRITE,
+			       NULL, on_rx_write, NULL),
+);
+
+/* Advertising payload.
+ *
+ * The NUS service UUID is here so a scanner can filter on it — that is how
+ * discovery works and the only thing it keys on.
+ *
+ * The manufacturer-specific field carries the device class. Company ID 0xFFFF
+ * is the Bluetooth SIG's reserved "no company / local use" value, which is
+ * what this is: a private hint, not an assigned identifier. bleak strips the
+ * company ID and hands the host the rest:
+ *
+ *   [0] AD protocol version
+ *   [1] device type   (PHYSDAQ_DEV_TYPE_*)
+ *   [2] PPG channel count
+ *   [3] capability flags (PHYSDAQ_DEV_FLAG_*)
+ *
+ * It is a *hint for the scan list only* — it lets the desktop app label an
+ * entry as a hub before connecting. Discovery still filters on the service
+ * UUID and never on this field or on the name, and once connected the ID line
+ * is the authority. The ID line is also the only one of the two that exists on
+ * USB, which has no advertising at all.
+ *
+ * Size: 3 (flags) + 18 (128-bit UUID) + 8 (manufacturer data) = 29 of the 31
+ * bytes an advertising payload allows. The name goes in the scan response, not
+ * here; adding anything further needs that arithmetic redone.
+ */
+static const struct bt_data ad[] = {
+	BT_DATA_BYTES(BT_DATA_FLAGS,
+		      (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_NUS_SERVICE_VAL),
+	BT_DATA_BYTES(BT_DATA_MANUFACTURER_DATA,
+		      0xFF, 0xFF,
+		      PHYSDAQ_AD_PROTO_VERSION,
+		      PHYSDAQ_DEV_TYPE_HUB,
+		      PPG_SENSOR_COUNT,
+		      PHYSDAQ_DEV_FLAG_SD),
+};
+
+/* Filled in by set_unique_name() before advertising starts. Not const, and not
+ * built from CONFIG_BT_DEVICE_NAME directly: the name carries a per-chip suffix
+ * that is only known at runtime. */
+static char             adv_name[CONFIG_BT_DEVICE_NAME_MAX + 1];
+static struct bt_data   sd[1];
+
+/* Append a suffix from the factory device ID, so two nodes are distinguishable
+ * in a scan. Derived rather than stored — this board has no NVS configured, and
+ * the ID is stable across reboots and reflashes because it is burned into FICR.
+ * Falls back to the plain configured name if hwinfo is unavailable, which costs
+ * uniqueness but never prevents the node from advertising. */
+static void set_unique_name(void)
+{
+	uint8_t id[8];
+	ssize_t len = hwinfo_get_device_id(id, sizeof(id));
+
+	if (len >= 2) {
+		snprintk(adv_name, sizeof(adv_name), "%s-%02X%02X",
+			 CONFIG_BT_DEVICE_NAME, id[len - 2], id[len - 1]);
+	} else {
+		snprintk(adv_name, sizeof(adv_name), "%s", CONFIG_BT_DEVICE_NAME);
+	}
+
+	int err = bt_set_name(adv_name);
+	if (err) {
+		printk("BLE: could not set name \"%s\" (%d)\n", adv_name, err);
+	}
+
+	/* Advertise whatever the stack actually accepted, which may have been
+	 * truncated to CONFIG_BT_DEVICE_NAME_MAX. */
+	const char *name = bt_get_name();
+	sd[0] = (struct bt_data)BT_DATA(BT_DATA_NAME_COMPLETE, name, strlen(name));
+}
+
+static void mtu_exchanged(struct bt_conn *conn, uint8_t err,
+			  struct bt_gatt_exchange_params *params)
+{
+	/* Log negotiated MTU so we can confirm payload capacity in make term */
+	printk("BLE: MTU %u bytes (%u payload)\n",
+	       bt_gatt_get_mtu(conn), bt_gatt_get_mtu(conn) - 3);
+}
+
+static void on_connected(struct bt_conn *conn, uint8_t err)
+{
+	if (err) {
+		return;
+	}
+	current_conn = bt_conn_ref(conn);
+
+	/* Request larger ATT MTU so a full data line (~120 B) fits in one notify.
+	 * Default ATT MTU = 23 B → 20 B payload, which is far too small.
+	 * Requesting from both sides ensures negotiation even if the central
+	 * (bleak) doesn't initiate it first. */
+	mtu_params.func = mtu_exchanged;
+	bt_gatt_exchange_mtu(conn, &mtu_params);
+
+	printk("BLE: connected\n");
+}
+
+static void on_disconnected(struct bt_conn *conn, uint8_t reason)
+{
+	if (current_conn) {
+		bt_conn_unref(current_conn);
+		current_conn   = NULL;
+		notify_enabled = false;
+	}
+	bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+	printk("BLE: disconnected (reason %u) — advertising\n", reason);
+}
+
+/* Log what the central actually granted after the preferred-parameter
+ * request (prj.conf BT_PERIPHERAL_PREF_*). The timeout matters most: with
+ * Windows' short default, a radio fade kills the link instead of just
+ * degrading it — this line is the way to confirm the 5 s request stuck. */
+static void on_param_updated(struct bt_conn *conn, uint16_t interval,
+			     uint16_t latency, uint16_t timeout)
+{
+	printk("BLE: conn params: interval %u ms, latency %u, timeout %u ms\n",
+	       (unsigned int)(interval * 125U / 100U), latency, timeout * 10U);
+}
+
+BT_CONN_CB_DEFINE(conn_cbs) = {
+	.connected        = on_connected,
+	.disconnected     = on_disconnected,
+	.le_param_updated = on_param_updated,
+};
+
+int ble_init(void)
+{
+	int err = bt_enable(NULL);
+	if (err) {
+		printk("BLE: enable failed (%d)\n", err);
+		return err;
+	}
+
+	/* After bt_enable(): bt_set_name() needs the stack up. */
+	set_unique_name();
+
+	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
+			      sd, ARRAY_SIZE(sd));
+	if (err) {
+		printk("BLE: advertising start failed (%d)\n", err);
+		return err;
+	}
+
+	printk("BLE: advertising as \"%s\" (NUS UUID)\n", bt_get_name());
+	return 0;
+}
+
+void ble_send(const uint8_t *data, size_t len)
+{
+	if (!current_conn || !notify_enabled) {
+		return;
+	}
+
+	uint16_t payload = bt_gatt_get_mtu(current_conn) - 3;
+	/* Safety: clamp in case MTU not yet negotiated or returns unexpected value */
+	if (payload < 20 || payload > 244) {
+		payload = 20;
+	}
+
+	size_t offset = 0;
+	while (offset < len) {
+		size_t chunk = MIN(payload, len - offset);
+		int err = bt_gatt_notify(current_conn, &nus_svc.attrs[2],
+					 data + offset, chunk);
+		if (err) {
+			/* TX queue full (-ENOMEM) or disconnected — drop rest of sample */
+			return;
+		}
+		offset += chunk;
+	}
+}
+
+bool ble_is_connected(void)
+{
+	return current_conn != NULL;
+}
+
+const char *ble_device_name(void)
+{
+	/* bt_get_name(), not adv_name: the stack may have truncated the name to
+	 * CONFIG_BT_DEVICE_NAME_MAX, and what is advertised is what it kept.
+	 * adv_name is only the "has set_unique_name() run yet" flag here —
+	 * before it has, bt_get_name() would hand back CONFIG_BT_DEVICE_NAME
+	 * with no per-chip suffix, which is a name no node ever advertises. */
+	return adv_name[0] ? bt_get_name() : "";
+}
+
+void ble_stop(void)
+{
+	bt_le_adv_stop();
+	if (current_conn) {
+		bt_conn_disconnect(current_conn,
+				   BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+		k_sleep(K_MSEC(150));
+	}
+}

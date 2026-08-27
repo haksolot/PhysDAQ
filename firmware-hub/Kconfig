@@ -1,0 +1,60 @@
+mainmenu "PhysDAQ Hub"
+
+source "Kconfig.zephyr"
+
+menu "PhysDAQ Hub"
+
+config PHYSDAQ_PPG_ODR_HZ
+	int "PPG sample rate per sensor (Hz)"
+	default 100
+	help
+	  Sample rate programmed into both MAX30102 SPO2_CONFIG registers, and
+	  recorded in the log file header so older samples in each FIFO burst
+	  can be back-dated offline (see src/storage.h).
+
+	  Only 50, 100, 200 and 400 are accepted. Those are the rates the part
+	  permits in SpO2 mode at the 411 us / 18-bit pulse width this firmware
+	  uses; other values are rejected at build time. 100 is the rate the
+	  single-PPG firmware was validated at — treat anything higher as
+	  unproven until a long run confirms the FIFOs keep up.
+
+config PHYSDAQ_SD_SYNC_INTERVAL_MS
+	int "Interval between forced filesystem syncs (ms)"
+	default 1000
+	range 100 10000
+	help
+	  Upper bound on how much data an ungraceful power loss can cost. The
+	  storage thread calls fs_sync() at least this often, so at the default
+	  1000 ms and 2 sensors at 100 Hz, a hard power cut loses at most one
+	  second of acquisition (~200 samples, 3.2 kB).
+
+	  Lowering this shrinks the loss window but costs an SD FAT+dirent
+	  write each time, which is the operation most likely to stall the card
+	  for tens of milliseconds.
+
+config PHYSDAQ_DEEP_SLEEP
+	bool "Enter deep sleep after an idle timeout"
+	default n
+	help
+	  Single-PPG node behaviour: after PHYSDAQ_IDLE_TIMEOUT_SEC without
+	  motion, skin contact or a BLE link, shut the sensors down and enter
+	  System Off (~0.4 uA), waking on the IMU activity interrupt.
+
+	  Off by default on the hub. A hub records unattended to microSD and is
+	  routinely stationary and unworn on a bench, which is exactly the state
+	  the idle timer treats as "put down" — it would power the node off
+	  mid-session. Idle accounting still runs and is still reported on the
+	  status line when this is disabled; only the System Off is suppressed.
+
+config PHYSDAQ_IDLE_TIMEOUT_SEC
+	int "Seconds of inactivity before deep sleep"
+	default 10
+	range 5 300
+	help
+	  Only acts when PHYSDAQ_DEEP_SLEEP is enabled. Counts consecutive
+	  seconds without gyroscope motion, without IR contact (src/contact.c)
+	  and without a BLE link — worn but still (e.g. resting) does not
+	  trigger sleep, only set down and unworn does. Wake-up is the
+	  LSM6DS3TR-C activity interrupt on INT1.
+
+endmenu

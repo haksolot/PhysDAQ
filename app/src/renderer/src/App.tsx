@@ -1,5 +1,12 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { RealTimeChart } from './components/RealTimeChart'
+import {
+  HubStoragePanel,
+  type SdFile,
+  type SdStat,
+  type DownloadState
+} from './components/HubStoragePanel'
+import { HubSatellitesPanel, type Satellite } from './components/HubSatellitesPanel'
 import { BoardVisualizer } from './components/BoardVisualizer'
 import { PhysDaqMark } from './components/PhysDaqMark'
 import { Button } from '@/components/ui/button'
@@ -34,6 +41,8 @@ import {
   RotateCcw
 } from 'lucide-react'
 
+type DeviceType = 'node' | 'hub'
+
 interface SensorNode {
   id: string
   position: string
@@ -52,6 +61,50 @@ interface SensorNode {
   gy: number
   gz: number
   logs: string[]
+  /** What kind of hardware feeds this slot. A hub feeds two slots at once. */
+  deviceType: DeviceType
+  /** Slot id of the device driving this one. Equals `id` for a node and for a
+   * hub's first channel; the hub's second slot points back at the first. Two
+   * slots sharing a deviceId share an IMU, a battery and a radio link. */
+  deviceId: string
+  /** Which PPG sensor of that device this slot shows. */
+  channelIndex: number
+}
+
+/** Device-level state that belongs to a hub rather than to either of the body
+ * positions it feeds: what its card is doing, and what it has been told about
+ * its satellites. Keyed by the hub's deviceId. */
+interface HubState {
+  fw?: string
+  ppgCount: number
+  hasSd: boolean
+  name?: string
+  /** Card status from the last sd.stat, or from the periodic Hub: line. */
+  sdStat: SdStat | null
+  /** Session files from the last completed sd.list. */
+  sdFiles: SdFile[]
+  /** A listing is in flight — entries stream in, so this clears on list end. */
+  sdListing: boolean
+  /** Entries accumulated by the listing currently in flight. */
+  sdPending: SdFile[]
+  download: DownloadState | null
+  satellites: Satellite[]
+  satMax: number
+  /** Same idea as sdPending: the roster streams entry by entry. */
+  satPending: Satellite[]
+}
+
+const EMPTY_HUB: HubState = {
+  ppgCount: 2,
+  hasSd: false,
+  sdStat: null,
+  sdFiles: [],
+  sdListing: false,
+  sdPending: [],
+  download: null,
+  satellites: [],
+  satMax: 8,
+  satPending: []
 }
 
 const SENSOR_POSITIONS = [
@@ -74,10 +127,28 @@ export default function App() {
   const [configureSlot, setConfigureSlot] = useState<string | null>(null)
   const [mode, setMode] = useState<'serial' | 'ble'>('ble')
   const [target, setTarget] = useState<string>('')
+  // What kind of device is being linked. Seeded from the scan's manufacturer
+  // data when the user picks a discovered device, but always overridable: over
+  // USB there is no advertisement to read it from.
+  const [deviceType, setDeviceType] = useState<DeviceType>('node')
+  // A hub carries two PPG sensors worn at two sites, so it claims a second
+  // body position. Unused when deviceType is 'node'.
+  const [secondSlot, setSecondSlot] = useState<string>('')
 
   // Device discovery lists
   const [serialPorts, setSerialPorts] = useState<{ port: string; desc: string; hwid: string }[]>([])
-  const [bleDevices, setBleDevices] = useState<{ address: string; name: string; rssi: number | null }[]>([])
+  const [bleDevices, setBleDevices] = useState<
+    {
+      address: string
+      name: string
+      rssi: number | null
+      // From the advertisement's manufacturer data; absent on firmware older
+      // than AD protocol 2.
+      deviceType?: DeviceType
+      ppgCount?: number
+      hasSd?: boolean
+    }[]
+  >([])
   const [isScanning, setIsScanning] = useState<boolean>(false)
   const [isFetchingPorts, setIsFetchingPorts] = useState<boolean>(false)
   const [scanError, setScanError] = useState<string | null>(null)
@@ -105,16 +176,43 @@ export default function App() {
   const [recordingData, setRecordingData] = useState<any[]>([])
 
   // Nodes state
-  const [sensors, setSensors] = useState<Record<string, SensorNode>>({
-    head: { id: 'head', position: 'head', label: 'Ear / Head', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
-    chest: { id: 'chest', position: 'chest', label: 'Chest (Torso)', mode: 'serial', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
-    wrist_left: { id: 'wrist_left', position: 'wrist_left', label: 'Left Wrist', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
-    wrist_right: { id: 'wrist_right', position: 'wrist_right', label: 'Right Wrist', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
-    finger_left: { id: 'finger_left', position: 'finger_left', label: 'Left Finger', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
-    finger_right: { id: 'finger_right', position: 'finger_right', label: 'Right Finger', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
-    ankle_left: { id: 'ankle_left', position: 'ankle_left', label: 'Left Ankle', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] },
-    ankle_right: { id: 'ankle_right', position: 'ankle_right', label: 'Right Ankle', mode: 'ble', target: '', status: 'disconnected', battery: null, bpm: null, contact: false, quat: [1, 0, 0, 0], ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, logs: [] }
-  })
+  // Built from SENSOR_POSITIONS rather than written out eight times over. Every
+  // field added to SensorNode used to mean editing eight ~250-character
+  // literals, and the hub work adds three.
+  const [sensors, setSensors] = useState<Record<string, SensorNode>>(() =>
+    Object.fromEntries(
+      SENSOR_POSITIONS.map((pos): [string, SensorNode] => [
+        pos.id,
+        {
+          id: pos.id,
+          position: pos.id,
+          label: pos.label,
+          // Chest is the position usually cabled during bring-up.
+          mode: pos.id === 'chest' ? 'serial' : 'ble',
+          target: '',
+          status: 'disconnected',
+          battery: null,
+          bpm: null,
+          contact: false,
+          quat: [1, 0, 0, 0],
+          ax: 0,
+          ay: 0,
+          az: 0,
+          gx: 0,
+          gy: 0,
+          gz: 0,
+          logs: [],
+          deviceType: 'node',
+          deviceId: pos.id,
+          channelIndex: 0
+        }
+      ])
+    )
+  )
+
+  // Device-level state for hubs, keyed by deviceId. Kept apart from `sensors`
+  // because it describes the box, not either body position it feeds.
+  const [hubs, setHubs] = useState<Record<string, HubState>>({})
 
   // Refs for real-time/static charts
   const dataRef = useRef<any[]>([])
@@ -178,6 +276,17 @@ export default function App() {
       setScanError(null)
       setSerialPorts([])
       setBleDevices([])
+      // Seed from whatever this slot was last linked as, so reopening the
+      // dialog on a configured hub does not silently demote it to a node.
+      const existing = configureSlot ? sensors[configureSlot] : undefined
+      setDeviceType(existing?.deviceType ?? 'node')
+      setSecondSlot(
+        existing?.deviceType === 'hub'
+          ? Object.values(sensors).find(
+              (n) => n.deviceId === existing.deviceId && n.channelIndex === 1
+            )?.id ?? ''
+          : ''
+      )
 
       if (mode === 'ble') {
         startBleScan()
@@ -188,11 +297,13 @@ export default function App() {
   }, [configureOpen, mode, showAllBle])
 
   // Firmware flashing
-  const [firmwareInfo, setFirmwareInfo] = useState<{
-    available: boolean
-    source: 'dev' | 'bundled'
-    error?: string
-  } | null>(null)
+  // Both images. Node and hub share a board, so the bootloader volume cannot
+  // say which one is wanted — the image follows the Device Type selection
+  // above, and getting it wrong bricks a working node until it is reflashed.
+  const [firmwareInfo, setFirmwareInfo] = useState<Record<
+    DeviceType,
+    { available: boolean; source: 'dev' | 'bundled'; error?: string }
+  > | null>(null)
   const [isFlashing, setIsFlashing] = useState(false)
   const [flashProgress, setFlashProgress] = useState<{
     stage: 'waiting' | 'copying' | 'done' | 'error'
@@ -222,7 +333,7 @@ export default function App() {
     }
 
     try {
-      await window.api.flashNode()
+      await window.api.flashNode(deviceType)
     } catch (err: any) {
       setFlashProgress({ stage: 'error', message: err?.message ?? String(err) })
     } finally {
@@ -275,15 +386,43 @@ export default function App() {
       autoDetect,
       ...devices.map((d) => {
         const alias = nodeAliases[d.address]
+        const isHub = d.deviceType === 'hub'
         return {
           value: d.address,
-          label: `${alias ? `${alias} — ` : ''}${d.name} (${d.address})`,
+          label: (
+            <span className="flex items-center gap-1.5">
+              {isHub && (
+                <span className="text-[9px] font-bold tracking-wider px-1 py-px rounded bg-primary/15 text-primary border border-primary/25">
+                  HUB
+                </span>
+              )}
+              <span>{`${alias ? `${alias} — ` : ''}${d.name} (${d.address})`}</span>
+            </span>
+          ),
           hint: d.rssi != null ? `${d.rssi} dBm` : undefined,
-          keywords: [alias ?? '', d.name ?? '', d.address]
+          keywords: [alias ?? '', d.name ?? '', d.address, isHub ? 'hub' : 'node']
         }
       })
     ]
   }, [mode, serialPorts, bleDevices, nodeAliases])
+
+  // Positions a hub's second sensor may claim: anything that is not the slot
+  // being configured and is not already driven by another connected device.
+  // Taking over a position that a different node is streaming into would make
+  // two sources write the same session CSV.
+  const secondSlotOptions = useMemo<ComboboxOption[]>(
+    () =>
+      SENSOR_POSITIONS.filter((pos) => {
+        if (pos.id === configureSlot) return false
+        const occupant = sensors[pos.id]
+        return !occupant || occupant.status === 'disconnected'
+      }).map((pos) => ({
+        value: pos.id,
+        label: pos.label,
+        keywords: [pos.id, pos.label]
+      })),
+    [configureSlot, sensors]
+  )
 
   const saveAlias = async () => {
     if (!target || target === 'auto-detect') return
@@ -344,7 +483,11 @@ export default function App() {
             contact: d.contact,
             quat: d.quat,
             ax: d.ax, ay: d.ay, az: d.az,
-            gx: d.gx, gy: d.gy, gz: d.gz
+            gx: d.gx, gy: d.gy, gz: d.gz,
+            // A hub's two slots are fed by one device; these say which.
+            deviceType: d.deviceType ?? node.deviceType,
+            deviceId: d.deviceId ?? node.deviceId,
+            channelIndex: d.channelIndex ?? node.channelIndex
           }
           changed = true
         }
@@ -360,6 +503,140 @@ export default function App() {
     const unsubscribeSensor = window.api.onSensorData((data) => {
       const { sensorId } = data
       if (!sensorId) return
+
+      // Hub device-level traffic. Every one of these arrives on both of a
+      // hub's slots (they share one link), so they are keyed on deviceId and
+      // the duplicate is idempotent.
+      const deviceId: string = data.deviceId ?? sensorId
+      const patchHub = (fn: (h: HubState) => HubState): void =>
+        setHubs((prev) => ({ ...prev, [deviceId]: fn(prev[deviceId] ?? EMPTY_HUB) }))
+
+      switch (data.type) {
+        case 'identity':
+          // The device announcing itself. Authoritative over anything the scan
+          // list guessed, and the only source of this at all over USB.
+          if (data.model === 'hub') {
+            patchHub((h) => ({
+              ...h,
+              fw: data.fw ?? h.fw,
+              ppgCount: data.ppg_count ?? h.ppgCount,
+              hasSd: data.has_sd ?? h.hasSd,
+              name: data.name || h.name
+            }))
+          }
+          return
+
+        case 'hub_status':
+          // The 5 s health line. Cheaper than polling sd.stat, and it keeps
+          // the panel honest between explicit refreshes.
+          patchHub((h) => ({
+            ...h,
+            sdStat: h.sdStat
+              ? { ...h.sdStat, ...(data.sd ?? {}) }
+              : { mounted: !!data.sd, ...(data.sd ?? {}) },
+            satMax: data.satellites?.max ?? h.satMax
+          }))
+          return
+
+        case 'sd_stat':
+          patchHub((h) => ({ ...h, sdStat: data as SdStat }))
+          return
+
+        case 'sd_file':
+          // Entries stream in one line at a time; they replace the visible
+          // list only once the "end" line confirms the walk completed, so a
+          // listing cut short by a disconnect cannot look like an empty card.
+          patchHub((h) => ({
+            ...h,
+            sdListing: true,
+            sdPending: [...h.sdPending, { name: data.name, size: data.size }]
+          }))
+          return
+
+        case 'sd_list_end':
+          patchHub((h) => ({
+            ...h,
+            sdFiles: h.sdPending,
+            sdPending: [],
+            sdListing: false
+          }))
+          return
+
+        case 'sd_progress':
+          patchHub((h) => ({
+            ...h,
+            download: { file: data.file, bytes: data.bytes }
+          }))
+          return
+
+        case 'sd_result':
+          patchHub((h) => {
+            const next = { ...h }
+            if (data.verb === 'sd.get') {
+              next.download = {
+                file: data.file ?? h.download?.file ?? '',
+                bytes: data.bytes ?? h.download?.bytes ?? 0,
+                done: true,
+                ok: !!data.ok,
+                path: data.path ?? null,
+                error: data.error ?? (data.errno ? `errno ${data.errno}` : null)
+              }
+            }
+            return next
+          })
+          // A delete or an erase changes what is on the card, so re-read it
+          // rather than mutating the list from here and hoping they agree.
+          if (data.ok && ['sd.del', 'sd.format'].includes(data.verb)) {
+            window.api.sendDeviceCommand(deviceId, { cmd: 'sd.list' })
+            window.api.sendDeviceCommand(deviceId, { cmd: 'sd.stat' })
+          }
+          return
+
+        case 'rec_state':
+          patchHub((h) => ({
+            ...h,
+            sdStat: h.sdStat
+              ? {
+                  ...h.sdStat,
+                  open: data.recording ? 1 : 0,
+                  sess: data.session ?? h.sdStat.sess
+                }
+              : h.sdStat
+          }))
+          return
+
+        case 'sat_begin':
+          patchHub((h) => ({ ...h, satMax: data.max, satPending: [] }))
+          return
+
+        case 'sat_entry':
+          patchHub((h) => ({
+            ...h,
+            satPending: [
+              ...h.satPending,
+              {
+                slot: data.slot,
+                addr: data.addr,
+                sourceId: data.source_id,
+                label: data.label
+              }
+            ]
+          }))
+          return
+
+        case 'sat_end':
+          patchHub((h) => ({ ...h, satellites: h.satPending, satPending: [] }))
+          return
+
+        case 'sat_result':
+          if (data.ok) {
+            window.api.sendDeviceCommand(deviceId, { cmd: 'sat.list' })
+          }
+          return
+
+        default:
+          break
+      }
 
       if (data.type === 'battery') {
         setSensors((prev) => {
@@ -434,25 +711,44 @@ export default function App() {
 
   const handleConnect = () => {
     if (!configureSlot) return
-    
+
     const finalTarget = target === 'auto-detect' ? '' : target
+    // channelSlots[0] is always the slot being configured — the hub's sensor 0
+    // lands where the user opened the dialog. A hub with no second position
+    // chosen still connects; sensor 1 is then acquired and recorded to the
+    // card, just not charted.
+    const channelSlots =
+      deviceType === 'hub' && secondSlot ? [configureSlot, secondSlot] : [configureSlot]
+
     window.api.connectSensor({
       id: configureSlot,
       mode,
       target: finalTarget,
-      position: configureSlot
+      position: configureSlot,
+      deviceType,
+      channelSlots
     })
 
-    setSensors((prev) => ({
-      ...prev,
-      [configureSlot]: {
-        ...prev[configureSlot],
-        status: 'connecting',
-        mode,
-        target: finalTarget,
-        logs: [`[UI] Initiating link to ${finalTarget || 'Auto'} via ${mode}...`]
-      }
-    }))
+    setSensors((prev) => {
+      const next = { ...prev }
+      channelSlots.forEach((slot, i) => {
+        if (!next[slot]) return
+        next[slot] = {
+          ...next[slot],
+          status: 'connecting',
+          mode,
+          target: finalTarget,
+          deviceType,
+          deviceId: configureSlot,
+          channelIndex: i,
+          logs: [
+            `[UI] Initiating link to ${finalTarget || 'Auto'} via ${mode}` +
+              (deviceType === 'hub' ? ` (hub sensor ${i})...` : '...')
+          ]
+        }
+      })
+      return next
+    })
     setConfigureOpen(false)
   }
 
@@ -689,6 +985,34 @@ export default function App() {
   staticImuRef.current = downsample(currentSubset)
 
   const activeSensor = selectedSensorId ? sensors[selectedSensorId] : null
+  // Device-level state for whatever hub feeds this slot. Both of a hub's slots
+  // resolve to the same entry, so the storage and satellite panels appear on
+  // either one.
+  const activeHub = activeSensor ? (hubs[activeSensor.deviceId] ?? null) : null
+
+  /** Send a command to the device behind the slot being viewed. Addressed by
+   * deviceId, not by the slot: the bridge process is registered under the slot
+   * the device was linked on, which for a hub's second position is the first
+   * one. */
+  const sendHubCommand = (cmd: Record<string, unknown>): void => {
+    if (!activeSensor) return
+    window.api.sendDeviceCommand(activeSensor.deviceId, cmd).catch((err) => {
+      console.error('Device command failed:', err)
+    })
+  }
+
+  // Ask a hub for its card and roster once, when its detail page is opened.
+  // Polling would be wasteful: the 5 s Hub: line already keeps the counters
+  // fresh, and the file list only changes when something in this app changes
+  // it.
+  useEffect(() => {
+    if (activeSensor?.deviceType !== 'hub') return
+    if (activeSensor.status !== 'connected') return
+    sendHubCommand({ cmd: 'sd.stat' })
+    sendHubCommand({ cmd: 'sd.list' })
+    sendHubCommand({ cmd: 'sat.list' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSensor?.deviceId, activeSensor?.deviceType, activeSensor?.status])
   const heartAnimDuration = activeSensor?.bpm ? `${60 / activeSensor.bpm}s` : '1.2s'
 
   return (
@@ -787,7 +1111,17 @@ export default function App() {
                   return (
                     <div key={pos.id} className="p-3 rounded-lg border border-border/80 bg-background/30 flex items-center justify-between transition-all hover:bg-background/50">
                       <div className="flex flex-col gap-0.5">
-                        <span className="text-xs font-bold text-foreground">{pos.label}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-foreground">{pos.label}</span>
+                          {sensor.deviceType === 'hub' && (
+                            <span
+                              className="text-[8px] font-bold tracking-wider px-1 py-px rounded bg-primary/15 text-primary border border-primary/25"
+                              title={`Fed by hub ${hubs[sensor.deviceId]?.name || sensor.deviceId} — sensor ${sensor.channelIndex}. Both of its positions share one IMU, battery and link.`}
+                            >
+                              HUB·S{sensor.channelIndex}
+                            </span>
+                          )}
+                        </span>
                         <div className="flex items-center gap-1.5 text-[9px] font-mono text-muted-foreground">
                           {isConnected ? (
                             <>
@@ -1083,6 +1417,30 @@ export default function App() {
                 <span className="text-[10px] text-muted-foreground font-semibold mt-2">Skin Contact</span>
               </Card>
             </div>
+
+            {/* Hub-only panels. Rendered on either of the hub's two slots:
+                both show the same device, and forcing the operator back to
+                one particular position to reach the card would be arbitrary. */}
+            {activeSensor.deviceType === 'hub' && activeHub && (
+              <>
+                <HubStoragePanel
+                  stat={activeHub.sdStat}
+                  files={activeHub.sdFiles}
+                  listing={activeHub.sdListing}
+                  download={activeHub.download}
+                  mode={activeSensor.mode}
+                  onCommand={sendHubCommand}
+                />
+                <HubSatellitesPanel
+                  satellites={activeHub.satellites}
+                  max={activeHub.satMax}
+                  candidates={bleDevices}
+                  scanning={isScanning}
+                  onScan={startBleScan}
+                  onCommand={sendHubCommand}
+                />
+              </>
+            )}
 
             {/* Battery state */}
             {activeSensor.battery && (
@@ -1523,7 +1881,14 @@ export default function App() {
 
               <Combobox
                 value={target}
-                onValueChange={setTarget}
+                onValueChange={(v) => {
+                  setTarget(v)
+                  // Seed the type from what the advertisement said. Only for a
+                  // scanned BLE device: serial ports carry no such hint, and
+                  // '-- Auto-detect --' names nothing to read it from.
+                  const picked = bleDevices.find((d) => d.address === v)
+                  if (picked?.deviceType) setDeviceType(picked.deviceType)
+                }}
                 options={targetOptions}
                 placeholder={mode === 'serial' ? '-- Auto-detect --' : '-- Auto-detect / Scan --'}
                 searchPlaceholder={mode === 'serial' ? 'Filter ports…' : 'Filter by name or address…'}
@@ -1549,6 +1914,64 @@ export default function App() {
                 </label>
               )}
             </div>
+
+            {/* Device class. A hub has two PPG sensors and a microSD card, so
+                it claims a second body position rather than one. */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
+                Device Type
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => { setDeviceType('node'); setSecondSlot('') }}
+                  className={`text-[11px] font-semibold py-1.5 rounded-md border transition-colors ${
+                    deviceType === 'node'
+                      ? 'bg-primary/15 border-primary/40 text-primary'
+                      : 'bg-background/50 border-border text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Node · 1 PPG
+                </button>
+                <button
+                  onClick={() => setDeviceType('hub')}
+                  className={`text-[11px] font-semibold py-1.5 rounded-md border transition-colors ${
+                    deviceType === 'hub'
+                      ? 'bg-primary/15 border-primary/40 text-primary'
+                      : 'bg-background/50 border-border text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Hub · 2 PPG + SD
+                </button>
+              </div>
+            </div>
+
+            {deviceType === 'hub' && (
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
+                  Second PPG Position
+                </span>
+                <Combobox
+                  value={secondSlot}
+                  onValueChange={setSecondSlot}
+                  options={secondSlotOptions}
+                  placeholder="-- Select a free position --"
+                  searchPlaceholder="Filter positions…"
+                  emptyMessage="No free position left."
+                  className="bg-background/50"
+                />
+                <p className="text-[10px] text-muted-foreground leading-snug">
+                  The hub&apos;s sensor 0 lands on{' '}
+                  <span className="font-mono text-foreground">{configureSlot}</span>; sensor 1 lands
+                  here. Both share this device&apos;s IMU, battery and link.
+                </p>
+                {!secondSlot && (
+                  <p className="text-[10px] text-amber-500 leading-snug">
+                    Without a second position, sensor 1 is acquired and logged to the card but not
+                    charted.
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Friendly name for this physical node */}
             <div className="flex flex-col gap-1.5">
@@ -1592,23 +2015,27 @@ export default function App() {
                 </label>
                 <button
                   onClick={handleFlash}
-                  disabled={isFlashing || !firmwareInfo?.available}
+                  disabled={isFlashing || !firmwareInfo?.[deviceType]?.available}
                   className="text-[10px] text-primary hover:underline flex items-center gap-1 font-semibold focus:outline-none disabled:opacity-40 disabled:hover:no-underline disabled:cursor-not-allowed"
                 >
                   <Cpu className={`w-2.5 h-2.5 ${isFlashing ? 'animate-pulse' : ''}`} />
-                  {isFlashing ? 'Flashing…' : 'Flash this node'}
+                  {isFlashing
+                    ? 'Flashing…'
+                    : `Flash ${deviceType === 'hub' ? 'hub' : 'node'} firmware`}
                 </button>
               </div>
 
-              {firmwareInfo && !firmwareInfo.available ? (
+              {firmwareInfo && !firmwareInfo[deviceType]?.available ? (
                 <p className="text-[10px] text-muted-foreground leading-normal">
-                  {firmwareInfo.error}
+                  {firmwareInfo[deviceType]?.error}
                 </p>
               ) : (
                 !flashProgress && (
                   <p className="text-[10px] text-muted-foreground leading-normal">
-                    Connect the node over USB, then press Flash and double-tap its RST
-                    button. Recording must be stopped first.
+                    Flashes the <span className="font-bold">{deviceType}</span> image,
+                    following the Device Type above. Connect over USB, press Flash, then
+                    double-tap the board&apos;s RST button. Recording must be stopped
+                    first.
                   </p>
                 )
               )}

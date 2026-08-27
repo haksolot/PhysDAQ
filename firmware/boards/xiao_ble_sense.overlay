@@ -34,8 +34,11 @@
 /*
  * VBAT sense circuit (Seeed XIAO nRF52840 Sense hardware, not in the
  * connector pin map): 1M / 510k divider to AIN7 (P0.31), gated by the
- * P0.14 read-enable pin. Keep P0.14 LOW except while sampling — driving
- * it HIGH disconnects the divider and can over-volt P0.31.
+ * active-low P0.14 read-enable pin. P0.14 LOW connects the divider; HIGH
+ * disconnects it. The pin is therefore driven LOW only while sampling and
+ * left HIGH the rest of the time, so the divider does not draw its ~2 uA
+ * continuously. GPIO_ACTIVE_LOW below is what makes battery.c's logical
+ * "1 = sampling" come out as a physical LOW.
  */
 / {
 	battery_divider: battery-divider {

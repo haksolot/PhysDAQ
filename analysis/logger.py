@@ -25,8 +25,19 @@ import threading
 from pathlib import Path
 
 BAUD    = 115200
+# Mirrors the bridge's regex: the hub's "| PPG1 red=… ir=… " section sits
+# between ir= and IMU, so a pattern that required them adjacent matched nothing
+# on a hub and the logger wrote a header and zero rows without complaining.
+# The section is optional and its groups are dropped — this CSV is the analysis
+# pipeline's single-channel input schema. Use the desktop app to capture both
+# of a hub's sensors.
+#
+# Groups: 1,2 = sensor 0 red/ir | 3,4 = sensor 1 red/ir (None on a node)
+#         5..10 = ax ay az gx gy gz
 PATTERN = re.compile(
-    r'PPG\s+red=(\d+)\s+ir=(\d+)\s+\|\s+IMU\s+'
+    r'PPG\s+red=(\d+)\s+ir=(\d+)\s+\|\s+'
+    r'(?:PPG1\s+red=(\d+)\s+ir=(\d+)\s+\|\s+)?'
+    r'IMU\s+'
     r'ax=(-?[\d.]+)\s+ay=(-?[\d.]+)\s+az=(-?[\d.]+)\s+'
     r'gx=(-?[\d.]+)\s+gy=(-?[\d.]+)\s+gz=(-?[\d.]+)'
 )
@@ -202,6 +213,7 @@ def main():
 
     count = 0
     t0    = time.monotonic()
+    warned_hub = False
 
     try:
         with open(out_path, "w", newline="") as f:
@@ -211,8 +223,13 @@ def main():
                 m = PATTERN.search(line)
                 if not m:
                     continue
+                g = m.groups()
+                if g[2] is not None and not warned_hub:
+                    print("\nNote: this is a hub — only its first PPG sensor is "
+                          "logged. Record from the desktop app to capture both.")
+                    warned_hub = True
                 t = time.monotonic() - t0
-                writer.writerow([f"{t:.4f}"] + list(m.groups()))
+                writer.writerow([f"{t:.4f}", g[0], g[1], *g[4:]])
                 count += 1
                 if count % 100 == 0:
                     print(f"  {count} samples  ({time.monotonic()-t0:.0f}s)",
