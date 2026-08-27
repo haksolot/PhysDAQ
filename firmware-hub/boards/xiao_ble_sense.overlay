@@ -1,0 +1,187 @@
+/*
+ * XIAO BLE Sense overlay — PhysDAQ Hub (dual PPG + microSD)
+ *
+ * I2C0 @ 0x6A : LSM6DS3TR-C IMU   (internal bus, pinctrl SDA=P0.07, SCL=P0.27)
+ * I2C1        : upstream bus      (D4/P0.04 SDA, D5/P0.05 SCL) -> PCA9546A @ 0x70
+ *   ch1 @ 0x57 : MAX30102 #1,  INT -> D1 / P0.03   (pads labelled "2")
+ *   ch2 @ 0x57 : MAX30102 #2,  INT -> D0 / P0.02   (pads labelled "3")
+ * SPI2        : microSD BFF       (D8 SCK, D9 MISO, D10 MOSI, D6 CS)
+ *
+ * Bus instance note: the hand-off report states TWIM1 is the internal IMU bus
+ * and TWIM0 is exposed on D4/D5. On this board it is the other way round —
+ * xiao_ble-pinctrl.dtsi maps i2c0 to P0.07/P0.27 (where xiao_ble_sense.dts
+ * places the LSM6DS3TR-C) and i2c1 to P0.04/P0.05, and the connector aliases
+ * i2c1 as `xiao_i2c`. The physical pins in the report's pin map are correct;
+ * only the peripheral label was swapped, so the mux goes on i2c1.
+ *
+ * Both MAX30102 are strapped to 0x57 and cannot be readdressed — that is the
+ * entire reason the mux exists. Their INT lines bypass the mux and land on
+ * plain GPIOs, so a sample-ready event can be timestamped the instant it fires
+ * regardless of which channel is currently selected. Do not route them through
+ * the mux.
+ *
+ * LED0 (P0.26 red), LED1 (P0.30 green), LED2 (P0.06 blue) come from
+ * xiao_ble_common.dtsi and are not redefined here.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/adc/adc.h>
+#include <zephyr/dt-bindings/adc/nrf-adc.h>
+
+/*
+ * uart0 claims P1.11 (TX) and P1.12 (RX) in xiao_ble-pinctrl.dtsi, and P1.11
+ * is now the microSD chip select. Two peripherals driving one pad is a silent
+ * failure, so uart0 must release it. Nothing is lost: the console is the USB
+ * CDC ACM port (zephyr,console in xiao_ble_common.dtsi), not this UART.
+ */
+&uart0 {
+	status = "disabled";
+};
+
+/*
+ * Upstream I2C. Raised to fast mode (400 kHz): every transaction now costs an
+ * extra mux channel-select write, and two sensors share the bus, so the
+ * standard-mode budget of the single-sensor firmware no longer holds.
+ */
+&i2c1 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+
+	mux: tca9546a@70 {
+		compatible = "ti,tca9546a";
+		reg = <0x70>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reset-gpios = <&gpio0 28 GPIO_ACTIVE_LOW>;   /* D2 / P0.28 */
+		status = "okay";
+
+		/*
+		 * Channel INDICES 1 and 2 are the populated ones. Channels 0
+		 * and 3 are unused and left floating — no nodes.
+		 *
+		 * These are NOT the numbers on the breakout's silk screen. The
+		 * hand-off report's section 4 says the sensors are on channels
+		 * 2 and 3 because that is how the pads are labelled, but this
+		 * board numbers its pads 1-4 while the part numbers its
+		 * channels 0-3 — so the pads marked "SD2/SC2" and "SD3/SC3"
+		 * are really indices 1 and 2. Measured, not assumed: the boot
+		 * self-test walks all four channels and reports which ones
+		 * answer at 0x57. Trust that output over the silk screen.
+		 *
+		 * The channel index is the `reg` value; i2c_tca954x.c converts
+		 * it to the control-register bit with BIT(DT_REG_ADDR(node)),
+		 * so reg = <1> selects 0x02 and reg = <2> selects 0x04.
+		 */
+
+		mux_ch1: tca9546a_ch1@1 {
+			compatible = "ti,tca9546a-channel";
+			reg = <1>;                 /* pads silkscreened "2" */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+
+			ppg0: max30102@57 {
+				compatible = "maxim,max30102";
+				reg = <0x57>;
+				/* P0.03 / D1, not P0.02: the boot self-test
+				 * enables this channel's sensor alone and
+				 * watches which line falls, and it is this
+				 * one. The INT wiring is independent of the
+				 * mux channel, so the pairing has to be
+				 * measured — pairing it wrong still acquires
+				 * cleanly, with every timestamp on the wrong
+				 * site. */
+				int-gpios = <&gpio0 3 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+				status = "okay";
+			};
+		};
+
+		mux_ch2: tca9546a_ch2@2 {
+			compatible = "ti,tca9546a-channel";
+			reg = <2>;                 /* pads silkscreened "3" */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+
+			ppg1: max30102@57 {
+				compatible = "maxim,max30102";
+				reg = <0x57>;
+				int-gpios = <&gpio0 2 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+				status = "okay";
+			};
+		};
+	};
+};
+
+/*
+ * microSD BFF on SPI2. The board declares spi2 as "nordic,nrf-spi" (no
+ * EasyDMA), which would service a 512-byte block one byte-interrupt at a time
+ * and contend with the two PPG interrupts we are trying to timestamp
+ * precisely. Overridden to "nordic,nrf-spim" so block transfers run from DMA.
+ *
+ * 4 MHz per the bring-up plan — the BFF is wired with discrete jumpers, which
+ * is the least reliable part of this build. Raise only once the link is proven
+ * stable over a long run.
+ */
+&spi2 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	cs-gpios = <&gpio1 11 GPIO_ACTIVE_LOW>;   /* D6 / P1.11 */
+
+	sdhc0: sdhc@0 {
+		compatible = "zephyr,sdhc-spi-slot";
+		reg = <0>;
+		status = "okay";
+		spi-max-frequency = <4000000>;
+
+		/* No disk-name property here: zephyr,sdmmc-disk does not define
+		 * one in Zephyr 3.6 (it includes sd-device.yaml -> base.yaml
+		 * only). The volume name comes from CONFIG_SDMMC_VOLUME_NAME,
+		 * which already defaults to "SD" when FAT_FILESYSTEM_ELM is on. */
+		mmc {
+			compatible = "zephyr,sdmmc-disk";
+			status = "okay";
+		};
+	};
+};
+
+/*
+ * VBAT sense circuit (Seeed XIAO nRF52840 Sense hardware, not in the
+ * connector pin map): 1M / 510k divider to AIN7 (P0.31), gated by the
+ * active-low P0.14 read-enable pin. P0.14 LOW connects the divider; HIGH
+ * disconnects it. The pin is therefore driven LOW only while sampling and
+ * left HIGH the rest of the time, so the divider does not draw its ~2 uA
+ * continuously. GPIO_ACTIVE_LOW below is what makes battery.c's logical
+ * "1 = sampling" come out as a physical LOW.
+ */
+/ {
+	battery_divider: battery-divider {
+		compatible = "voltage-divider";
+		io-channels = <&adc 7>;
+		output-ohms = <510000>;
+		full-ohms = <(1000000 + 510000)>;
+		power-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+	};
+};
+
+/* Hardware watchdog — last-resort recovery if the main loop ever hangs
+ * (see src/watchdog.c). Usually already enabled on nRF52840, but make it
+ * explicit so the build never silently drops the WDT. */
+&wdt0 {
+	status = "okay";
+};
+
+&adc {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@7 {
+		reg = <7>;
+		zephyr,gain = "ADC_GAIN_1_6";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,input-positive = <NRF_SAADC_AIN7>;
+		zephyr,resolution = <12>;
+	};
+};

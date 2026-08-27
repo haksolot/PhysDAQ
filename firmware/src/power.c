@@ -87,11 +87,17 @@ void power_update(const struct sensor_value gyro[3])
 
 	bool motion = (gx*gx + gy*gy + gz*gz) > MOTION_THRESH_SQ;
 	bool skin   = contact_is_skin();
+	bool linked = ble_is_connected();
 
-	/* Stay awake if either signal is active: moving, or worn-and-still
-	 * (validated pulse, no motion — e.g. resting). Only idle on both at
-	 * once does the sleep timer run out. */
-	if (motion || skin) {
+	/* Stay awake if any signal is active: moving, worn-and-still (skin
+	 * contact, no motion — e.g. resting), or a live BLE link. The link
+	 * check matters because the skin check alone is not reliable on a
+	 * worn node: a slightly loose strap drops the IR DC below the
+	 * contact threshold, and a worn-but-still node then hit the idle
+	 * timeout mid-session — the host saw it as a random disconnection.
+	 * Tradeoff: a node left connected never sleeps; disconnect it in the
+	 * app (or close the app) to let it power down. */
+	if (motion || skin || linked) {
 		last_active_ms = now;
 	}
 
@@ -104,14 +110,21 @@ void power_update(const struct sensor_value gyro[3])
 	}
 
 	/* Periodic status line so you can watch the countdown in 'make term'.
-	 * Format:  Power: idle Xs/10s | skin: yes (dc=29050) | peak ~Xmrad/s (thresh 100mrad/s) */
+	 * Format:  Power: idle Xs/10s | skin: yes (dc=29050) | ble: yes | peak ~Xmrad/s (thresh 100mrad/s)
+	 * Sent over BLE too: printk only reaches the USB console, and a node
+	 * used wirelessly would otherwise stream zero diagnostics to the app. */
 	if (now - last_status_ms >= STATUS_INTERVAL_MS) {
 		int32_t idle_s = (int32_t)((now - last_active_ms) / 1000);
 		struct contact_debug dbg;
 		contact_get_debug(&dbg);
-		printk("Power: idle %ds/%ds | skin: %s (dc=%d) | peak ~%dmrad/s (thresh %dmrad/s)\n",
+		char sline[128];
+		int sn = snprintk(sline, sizeof(sline),
+		       "Power: idle %ds/%ds | skin: %s (dc=%d) | ble: %s | peak ~%dmrad/s (thresh %dmrad/s)\n",
 		       idle_s, CONFIG_PHYSDAQ_IDLE_TIMEOUT_SEC, skin ? "yes" : "no",
-		       (int)dbg.dc, peak_mrad, MOTION_THRESH_MRAD);
+		       (int)dbg.dc, linked ? "yes" : "no",
+		       peak_mrad, MOTION_THRESH_MRAD);
+		printk("%s", sline);
+		ble_send((const uint8_t *)sline, sn);
 		last_status_ms = now;
 		peak_mrad      = 0;
 	}

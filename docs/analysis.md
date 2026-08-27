@@ -27,6 +27,12 @@ timestamp,red,ir,ax,ay,az,gx,gy,gz
 `timestamp` is a float in seconds. Works over serial or BLE; BLE discovery is by
 NUS service UUID, never by device name.
 
+> **The logger records one channel of a hub.** Its regex mirrors the bridge's:
+> the hub's `| PPG1 red=… ir=…` section is optional and its groups are dropped,
+> because this CSV *is* the pipeline's single-channel input schema. `make log`
+> against a hub therefore works, prints a one-line notice, and writes sensor 0
+> only. Record from the desktop app to capture both of a hub's sensors.
+
 ---
 
 ## 2. `analysis/pipeline.py` — processing
@@ -57,6 +63,40 @@ Reads one logger CSV, writes three siblings next to it:
    out of the PPG.
 6. **Spectral BPM** (`spectral_bpm()`) — sliding 8 s window, 2 s step, FFT.
 7. **Beat detection** (`compute_beats()`) → IBI, instantaneous BPM, RMSSD, SpO2.
+
+Numbered as a list it reads linear, but the real shape branches: the PPG is
+filtered **twice**, into two different bands for two different consumers, and the
+DC levels bypass both.
+
+```mermaid
+flowchart LR
+  RAW["red / ir<br/>raw counts"]
+  ACC["ax ay az<br/>gx gy gz"]
+
+  RAW --> DISP["display band<br/>0.5–8 Hz"]
+  RAW --> DC["ir_dc / red_dc<br/>DC levels"]
+  ACC --> AHRS["Madgwick AHRS<br/>+ gravity removal"]
+  AHRS --> MREF["motion reference<br/>≤ 3.5 Hz"]
+  AHRS --> MMASK["motion mask<br/>0.5 × rolling RMS, 4 s"]
+  DC --> CMASK["contact mask<br/>ir_dc ≥ 5000"]
+
+  RAW --> MC["motion_cancel()<br/>order-8 Wiener"]
+  MREF --> MC
+  MC --> BEAT["beat band<br/>0.7–3.0 Hz"]
+
+  BEAT --> CB["compute_beats()<br/>IBI, BPM, RMSSD"]
+  BEAT --> SB["spectral_bpm()<br/>8 s window, 2 s step, SNR ≥ 2.0"]
+  DC --> SPO2["SpO2 · 110 − 25·R"]
+  CMASK -.-> CB
+  CMASK -.-> SB
+  MMASK -.-> CB
+
+  DISP --> E[("_enriched.csv<br/>per sample")]
+  CB --> B[("_beats.csv<br/>per beat")]
+  SPO2 --> B
+  AHRS --> E
+  SB --> S[("_bpm_spectral.csv<br/>per 2 s window")]
+```
 
 ### Why the parameters are what they are
 
@@ -144,3 +184,9 @@ columns. Feeding one to `make process` raises on the timestamp conversion.
 **There is no converter in the repo yet.** For now, use `make log` when you
 intend to run the offline pipeline, and the app's recorder when you want
 multi-node sessions. See [roadmap.md](roadmap.md).
+
+There is now a **third** format this pipeline cannot read: the hub's on-card
+`.BIN` files (512-byte header, 16-byte records, documented in
+[firmware-hub.md](firmware-hub.md#file-format)). The app can download them, but
+nothing here parses them, so a downloaded session is currently a raw deliverable
+rather than an input.

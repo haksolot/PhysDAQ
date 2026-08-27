@@ -4,12 +4,14 @@ Electron + React front-end for the PhysDAQ wearable. It does not talk to the
 hardware itself — it spawns **`scripts/bridge.py`** (the *sidecar*) as a child
 process, one per connected sensor, and reads JSON lines from its stdout.
 
-```
-┌──────────────────────┐   spawn + stdout JSON   ┌──────────────────┐   serial / BLE
-│ Electron main        │ ──────────────────────► │ bridge (Python)  │ ◄──────────────► XIAO nRF52840
-│ src/main/sidecar.ts  │ ◄────────────────────── │ numpy · scipy    │
-└──────────────────────┘                         │ bleak · imufusion│
-                                                 └──────────────────┘
+```mermaid
+flowchart LR
+  MAIN["Electron main<br/>src/main/sidecar.ts"]
+  BR["bridge (Python)<br/>numpy · scipy<br/>bleak · imufusion"]
+  DEV(["XIAO nRF52840"])
+  MAIN -- "spawn · stdin commands" --> BR
+  BR -- "stdout JSON · stderr logs" --> MAIN
+  BR <-- "serial / BLE" --> DEV
 ```
 
 ## Quick reference

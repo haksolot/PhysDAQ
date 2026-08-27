@@ -8,8 +8,10 @@ config PHYSDAQ_IDLE_TIMEOUT_SEC
 	range 5 300
 	help
 	  The device enters deep sleep (system off, ~0.4 µA) after this many
-	  consecutive seconds without gyroscope motion AND without IR contact
-	  (see firmware/src/contact.c) — worn but still (e.g. resting) does
-	  not trigger sleep, only set down and unworn does.
+	  consecutive seconds with none of the three activity signals: no
+	  gyroscope motion, no IR skin contact (see firmware/src/contact.c),
+	  and no BLE connection. Worn but still (e.g. resting) does not
+	  trigger sleep, and neither does a live host link — a node left
+	  connected never sleeps, so disconnect it to let it go down.
 	  Wake-up is triggered by the LSM6DS3TR-C activity interrupt on INT1.
 	  Change in prj.conf: CONFIG_PHYSDAQ_IDLE_TIMEOUT_SEC=<value>

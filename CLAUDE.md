@@ -10,14 +10,18 @@ nRF52840 Sense + MAX30102 PPG, a Python DSP bridge, an Electron desktop app for
 multi-node live acquisition and recording, and an offline analysis pipeline.
 
 Nodes are **independent BLE peripherals / USB CDC devices**. There is no mesh —
-all multi-node aggregation is host-side, one bridge process per node. Do not
-describe it as a mesh network.
+all multi-node aggregation is host-side, one bridge process per device. Do not
+describe it as a mesh network. The hub is not an exception: it carries two of
+its own PPG sensors, and its satellite roster is configuration it remembers, not
+a radio link it uses. Ingestion of remote nodes is designed for and **not
+implemented** — say so whenever the roster comes up.
 
 ## Layout
 
 | Path | Layer | Doc |
 |---|---|---|
-| `firmware/` | Zephyr 3.6 app (C) | [docs/firmware.md](docs/firmware.md), [docs/hardware.md](docs/hardware.md) |
+| `firmware/` | Zephyr 3.6 app (C) — single-PPG node | [docs/firmware.md](docs/firmware.md), [docs/hardware.md](docs/hardware.md) |
+| `firmware-hub/` | Zephyr 3.6 app (C) — dual-PPG + microSD hub, host command channel | [docs/firmware-hub.md](docs/firmware-hub.md) |
 | `scripts/bridge.py` | serial/BLE → JSON sidecar | [docs/protocol.md](docs/protocol.md) |
 | `app/` | Electron + React desktop app | [docs/desktop-app.md](docs/desktop-app.md) |
 | `analysis/` | offline pipeline, logger, explorer | [docs/analysis.md](docs/analysis.md) |
@@ -27,6 +31,7 @@ describe it as a mesh network.
 
 ```bash
 make build / rebuild / flash / term    # firmware  (rebuild after DTS or Kconfig changes)
+make hub / hub-rebuild / hub-flash     # firmware-hub (builds into build-hub/)
 make log / process FILE=… / explore FILE=…
 make sidecar                           # freeze bridge.py for packaging
 cd app && npm run dev / typecheck / build:win
@@ -53,6 +58,20 @@ targets — see [docs/development.md](docs/development.md).
 - **`PYTHONPATH`/`PYTHONHOME` are stripped** before spawning Python. The Zephyr
   toolchain sets them and it breaks numpy in the venv.
 - **BLE discovery is by service UUID, never by device name.** Keep it that way.
+  The advertisement also carries a manufacturer-data byte naming the device type
+  — that is a *hint for the scan list*, not a discovery filter, and the `ID` line
+  is what actually decides once connected.
+- **The sample line must keep starting `PPG red=`.** The bridge matches with
+  `re.search`, so a hub's longer line still yields sensor 0 to an older bridge.
+  Correspondingly, **no other line on either stream may start with `PPG`** — the
+  parser silently discards unmatched lines that do, which is why status lines and
+  command replies read `Hub:`, `SD`, `REC`, `SAT`, `ID`.
+- **On the hub, only the storage thread touches the file system.** Commands post
+  a request and block. FATFS is not reentrant across a volume, and the storage
+  thread holds the session file open.
+- **A hub feeds two body-position slots from one bridge process.** `channelSlots`
+  in `sidecar.ts` maps PPG channel → slot, and `activeRecordings` is keyed on the
+  slot, not the device. That is what keeps the 17-column session CSV unchanged.
 
 ## Gotchas
 
@@ -75,5 +94,5 @@ targets — see [docs/development.md](docs/development.md).
   check) are recorded in-source — preserve them when editing.
 - LF line endings everywhere except `.ps1`/`.bat`; CAD files under `hardware/`
   are marked `binary`.
-- Do not commit `build/`, `.west/`, `zephyr/`, `modules/`, `.venv/`,
-  `app/node_modules/`, `app/out/`, `app/sidecar/`.
+- Do not commit `build/`, `build-hub/`, `.west/`, `zephyr/`, `modules/`,
+  `.venv/`, `app/node_modules/`, `app/out/`, `app/sidecar/`.

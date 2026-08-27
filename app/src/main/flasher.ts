@@ -19,34 +19,54 @@ const UF2_MARKER = 'INFO_UF2.TXT'
 /** Substring expected in INFO_UF2.TXT's Board-ID / Model line. */
 const BOARD_HINT = 'XIAO'
 
+/** Which firmware to flash. Both run on the same board, and the bootloader
+ * volume identifies the board, not the application — so nothing can infer this
+ * and the operator has to say. */
+export type FirmwareImage = 'node' | 'hub'
+
 export interface FirmwareInfo {
   available: boolean
   path?: string
-  /** 'dev' = whatever `make build` last produced; 'bundled' = shipped in the installer. */
+  /** 'dev' = whatever `make build` / `make hub` last produced; 'bundled' =
+   * shipped in the installer. */
   source: 'dev' | 'bundled'
   error?: string
 }
 
-/** Where the image to flash comes from — the same dev-vs-packaged split
+/** Both images, so the UI can say which are actually available rather than
+ * offering a choice that fails on click. */
+export type FirmwareCatalog = Record<FirmwareImage, FirmwareInfo>
+
+const IMAGE_PATHS: Record<FirmwareImage, { dev: string[]; bundled: string; make: string }> = {
+  node: { dev: ['build', 'zephyr', 'zephyr.uf2'], bundled: 'physdaq.uf2', make: 'make build' },
+  hub: { dev: ['build-hub', 'zephyr', 'zephyr.uf2'], bundled: 'physdaq-hub.uf2', make: 'make hub' }
+}
+
+/** Where an image comes from — the same dev-vs-packaged split
  * getBridgeInvocation() uses for the sidecar. In development you flash whatever
  * you just built; an installed copy flashes the image shipped alongside it. */
-export function getFirmwareInfo(): FirmwareInfo {
+export function getFirmwareInfo(image: FirmwareImage = 'node'): FirmwareInfo {
   const source: 'dev' | 'bundled' = is.dev ? 'dev' : 'bundled'
+  const spec = IMAGE_PATHS[image] ?? IMAGE_PATHS.node
   const path = is.dev
-    ? join(getRepoRoot(), 'build', 'zephyr', 'zephyr.uf2')
-    : join(process.resourcesPath, 'firmware', 'physdaq.uf2')
+    ? join(getRepoRoot(), ...spec.dev)
+    : join(process.resourcesPath, 'firmware', spec.bundled)
 
   if (!existsSync(path)) {
     return {
       available: false,
       source,
       error: is.dev
-        ? `No firmware image at ${path}. Run "make build" first.`
-        : 'This build was packaged without a firmware image, so flashing is unavailable.'
+        ? `No ${image} firmware image at ${path}. Run "${spec.make}" first.`
+        : `This build was packaged without the ${image} firmware image, so flashing it is unavailable.`
     }
   }
 
   return { available: true, path, source }
+}
+
+export function getFirmwareCatalog(): FirmwareCatalog {
+  return { node: getFirmwareInfo('node'), hub: getFirmwareInfo('hub') }
 }
 
 /** Mount points that could plausibly hold a UF2 volume, per platform. */
@@ -119,9 +139,10 @@ export interface FlashResult {
  * `timeoutMs` bounds only the wait for the double-tap, not the copy. */
 export async function flashNode(
   window: BrowserWindow | null,
+  image: FirmwareImage = 'node',
   timeoutMs = 60_000
 ): Promise<FlashResult> {
-  const firmware = getFirmwareInfo()
+  const firmware = getFirmwareInfo(image)
   if (!firmware.available || !firmware.path) {
     const error = firmware.error ?? 'No firmware image available.'
     report(window, 'error', error)

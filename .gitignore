@@ -3,6 +3,7 @@
 # electron-builder's buildResources directory (icons, mac entitlements) and has
 # to be tracked. The app's own outputs are ignored by app/.gitignore.
 /build/
+/build-hub/
 *.uf2
 
 # Zephyr workspace (auto-populated by west)

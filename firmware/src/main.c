@@ -8,12 +8,35 @@
 #include "battery.h"
 #include "contact.h"
 #include "watchdog.h"
+#include "version.h"
 
 /* Format a sensor_value (val1 + val2/1e6) as "±integer.milli" using printk.
  * Mirrors the print_val helper in imu.c, kept local to avoid coupling. */
 #define SV_SIGN(v)  (((v)->val1 < 0 || (v)->val2 < 0) ? "-" : "")
 #define SV_INT(v)   ((v)->val1 < 0 ? -(v)->val1 : (v)->val1)
 #define SV_MILLI(v) (((v)->val2 < 0 ? -(v)->val2 : (v)->val2) / 1000)
+
+/*
+ * Identity line. This is what tells the host which firmware it is talking to
+ * and how many PPG channels to expect.
+ *
+ * Sent over both transports, unlike most diagnostics. The manufacturer data in
+ * the advertisement carries the same device type, but USB CDC has no
+ * advertising at all, so without this line a cabled node is unidentifiable.
+ * Re-sent on every new BLE connection: a central that connects late has missed
+ * the boot copy, and on USB the console does not exist yet while the board
+ * boots, so the boot copy is routinely lost there too.
+ */
+static void send_identity(void)
+{
+    char line[128];
+    int n = snprintk(line, sizeof(line),
+        "ID model=node proto=%d fw=%s ppg=1 sd=0 name=%s\n",
+        PHYSDAQ_AD_PROTO_VERSION, PHYSDAQ_FW_STRING, ble_device_name());
+
+    printk("%s", line);
+    ble_send((const uint8_t *)line, n);
+}
 
 int main(void)
 {
@@ -49,6 +72,8 @@ int main(void)
     printk("Power: sleep after %d s idle\n\n",
            CONFIG_PHYSDAQ_IDLE_TIMEOUT_SEC);
 
+    send_identity();
+
     int64_t last_data_ms = k_uptime_get();
 
     while (1) {
@@ -58,6 +83,15 @@ int main(void)
          * and the SoC resets itself within the WDT window instead of freezing
          * indefinitely. */
         watchdog_feed();
+
+        /* Rising edge of the BLE link: a central that just connected has not
+         * seen the boot copy of the identity line. */
+        static bool was_linked;
+        bool linked = ble_is_connected();
+        if (linked && !was_linked) {
+            send_identity();
+        }
+        was_linked = linked;
 
         /* Wait for a PPG_RDY interrupt, or fall through on the timeout. The
          * timeout path is harmless and self-healing: max30102_wait_ready()
@@ -127,7 +161,14 @@ int main(void)
         if (got_data) {
             last_data_ms = now;
         } else if (now - last_data_ms > 1000) {
-            printk("MAX30102: no data for >1s — reinitialising sensor\n");
+            /* Dual-send like the battery line: over BLE, printk-only
+             * diagnostics never reach the app, and a recurring reinit is
+             * exactly the "slowdown before disconnect" signature worth
+             * seeing in the System Logs pane. */
+            static const char reinit_msg[] =
+                "MAX30102: no data for >1s — reinitialising sensor\n";
+            printk("%s", reinit_msg);
+            ble_send((const uint8_t *)reinit_msg, sizeof(reinit_msg) - 1);
             max30102_init();
             last_data_ms = k_uptime_get();
         }

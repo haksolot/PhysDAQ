@@ -9,7 +9,12 @@ import subprocess
 BOARD    = sys.argv[1] if len(sys.argv) > 1 else "xiao_ble_sense"
 APP      = sys.argv[2] if len(sys.argv) > 2 else "firmware"
 PRISTINE = "always" if "--pristine" in sys.argv else "auto"
-BUILD    = "build"
+
+# Optional --build-dir=DIR. The hub firmware builds into its own directory so
+# the two apps can coexist without pristine-rebuilding each other every time
+# you switch. Defaults to "build" so existing invocations are unchanged.
+BUILD    = next((a.split("=", 1)[1] for a in sys.argv
+                 if a.startswith("--build-dir=")), "build")
 
 
 def is_stale_build():
@@ -52,7 +57,8 @@ def main():
         print("    . .\\scripts\\setup-env.ps1   (inside that shell)")
         sys.exit(1)
 
-    cmd = ["west", "build", "--pristine", PRISTINE, "-b", BOARD, APP]
+    cmd = ["west", "build", "--pristine", PRISTINE, "-b", BOARD, APP,
+           "-d", BUILD]
     print(f"[build-wrapper] Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
     print(f"[build-wrapper] OK: {BUILD}/zephyr/zephyr.uf2")

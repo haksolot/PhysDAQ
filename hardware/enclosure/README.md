@@ -2,10 +2,22 @@
 
 3D-printable case for a PhysDAQ sensor node.
 
-> **Status: not yet designed.** `models/` is empty. This document specifies the
-> constraints any design must satisfy and the conventions for adding files, so
-> that whoever designs it does not have to re-derive them from the firmware and
-> schematics.
+<p align="center">
+  <img src="../../assets/images/hardware/device-exploded.png" width="420" alt="PhysDAQ sensor — exploded view"/>
+</p>
+
+> **Status: a first design is filed, in STEP only.** The case and lid are
+> modelled — [`models/physdaq-case-v1.step`](models/physdaq-case-v1.step) and
+> [`models/physdaq-lid-v1.step`](models/physdaq-lid-v1.step) — but neither has
+> an editable source (`.f3d`) or a printable mesh (`.stl`) committed alongside
+> it, so the convention below is only half satisfied. Slice the STEP directly,
+> or import it to reproduce a source.
+>
+> The constraints in this document remain the specification any design has to
+> satisfy. See [roadmap.md](../../docs/roadmap.md).
+
+This document covers the **single-PPG node**. The hub is a larger board build
+with a different pin map and a microSD card, and has no enclosure design.
 
 ---
 
@@ -103,4 +115,8 @@ and prefer regenerating STLs from source over committing many variants.
 
 ## Changelog
 
-*(no revisions yet)*
+**v1** — first design, filed as `models/physdaq-case-v1.step` and
+`models/physdaq-lid-v1.step`. STEP only: no editable source and no printable
+mesh committed. The renders in the repository [README](../../README.md) are
+taken from it. Print notes: none recorded — this revision has not been
+verified against the design requirements above on a printed part.

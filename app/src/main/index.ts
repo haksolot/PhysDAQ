@@ -4,7 +4,12 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { startSidecar, getSerialPorts, scanBle } from './sidecar'
 import { getNodeAliases, setNodeAlias } from './config'
-import { flashNode, getFirmwareInfo, getBootloaderStatus } from './flasher'
+import {
+  flashNode,
+  getFirmwareCatalog,
+  getBootloaderStatus,
+  type FirmwareImage
+} from './flasher'
 
 function createWindow(): void {
   // Create the browser window.
@@ -66,10 +71,12 @@ app.whenReady().then(() => {
   ipcMain.handle('set-node-alias', (_, target: string, alias: string) =>
     setNodeAlias(target, alias)
   )
-  ipcMain.handle('get-firmware-info', () => getFirmwareInfo())
+  // Both images, not one: node and hub run on the same board, so the
+  // bootloader volume cannot say which is wanted and the operator must pick.
+  ipcMain.handle('get-firmware-info', () => getFirmwareCatalog())
   ipcMain.handle('get-bootloader-status', () => getBootloaderStatus())
-  ipcMain.handle('flash-node', (event) =>
-    flashNode(BrowserWindow.fromWebContents(event.sender))
+  ipcMain.handle('flash-node', (event, image: FirmwareImage = 'node') =>
+    flashNode(BrowserWindow.fromWebContents(event.sender), image)
   )
 
   createWindow()

@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/physdaq-dark.svg">
-    <img src="assets/physdaq.svg" alt="" width="88" height="88">
+    <img src="assets/physdaq.svg" alt="PhysDAQ" width="88" height="88">
   </picture>
 </p>
 
@@ -17,6 +17,11 @@
   <img alt="Zephyr" src="https://img.shields.io/badge/Zephyr-3.6-informational">
   <img alt="MCU" src="https://img.shields.io/badge/MCU-nRF52840-informational">
 </p>
+
+<p align="center">
+  <img src="assets/images/hardware/device-exploded.png" width="420" alt="PhysDAQ sensor — exploded view"/>
+</p>
+<p align="center"><sub><i>PhysDAQ sensor node — exploded view showing the XIAO nRF52840, MAX30102 pulse oximeter, LiPo battery and 3D-printed enclosure.</i></sub></p>
 
 ---
 
@@ -36,6 +41,39 @@
 Step by step, including where to place a sensor on the body and how to read the
 live view: **[User Guide](docs/user-guide.md)**.
 
+---
+
+## Overview
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### Hardware
+
+A compact, battery-powered sensor node that clips to the body. Each unit combines a 6-axis IMU and a clinical-grade pulse oximeter in a 3D-printed enclosure.
+
+<p align="center">
+  <img src="assets/images/hardware/device-assembled-side.png" width="340" alt="Assembled PhysDAQ sensor"/>
+</p>
+
+</td>
+<td width="50%" valign="top">
+
+### Desktop App
+
+A cross-platform acquisition interface that discovers sensors over USB or BLE, displays live signals, and exports timestamped CSVs.
+
+<p align="center">
+  <img src="assets/images/software/desktop-dashboard.png" width="420" alt="PhysDAQ desktop dashboard"/>
+</p>
+
+</td>
+</tr>
+</table>
+
+---
+
 ## What you get
 
 - **Pulse and motion together**, 100 times per second: the raw red and infrared
@@ -51,32 +89,43 @@ live view: **[User Guide](docs/user-guide.md)**.
   blood-oxygen estimation and motion cancellation. See
   [Analysis Pipeline](docs/analysis.md) — note the CSV format caveat there.
 
+---
+
 ## What you need
 
-| | |
-|---|---|
-| Sensor board | Seeed Studio XIAO nRF52840 Sense (motion sensor built in) |
-| Pulse sensor | Maxim MAXREFDES117# (MAX30102), connected over I2C |
-| Recording rate | 100 Hz, red + infrared, 18-bit |
-| Connection | USB cable, or Bluetooth Low Energy |
+<p align="center">
+  <img src="assets/images/hardware/device-assembled-top.png" width="380" alt="PhysDAQ sensor — top view"/>
+</p>
 
-Each sensor runs on a single-cell LiPo battery and sleeps at ~0.4 µA between
-sessions, waking when it is moved. Full parts list, pin map and register
-configuration: **[Hardware Reference](docs/hardware.md)**.
+| Component      | Specification                                             |
+| -------------- | --------------------------------------------------------- |
+| Sensor board   | Seeed Studio XIAO nRF52840 Sense (motion sensor built in) |
+| Pulse sensor   | Maxim MAXREFDES117# (MAX30102), connected over I2C        |
+| Recording rate | 100 Hz, red + infrared, 18-bit                            |
+| Connection     | USB cable, or Bluetooth Low Energy                        |
+| Power          | Single-cell LiPo battery                                  |
+| Sleep current  | ~0.4 µA between sessions, wake-on-motion                  |
+
+Full parts list, pin map and register configuration: **[Hardware Reference](docs/hardware.md)**.  
+Enclosure CAD (STEP) and printing instructions: **[Enclosure](hardware/enclosure/README.md)**.
+
+---
 
 ## Documentation
 
-| If you want to | Read |
-|---|---|
-| set a sensor up and record a session | [User Guide](docs/user-guide.md) |
-| build a sensor from parts | [Hardware Reference](docs/hardware.md) |
-| print the case | [Enclosure](hardware/enclosure/README.md) |
-| understand what the recorded numbers mean | [Data Contracts](docs/protocol.md) |
-| process recordings offline | [Analysis Pipeline](docs/analysis.md) |
-| set up a development machine | [Development Guide](docs/development.md) |
-| change what runs on the sensor | [Firmware Reference](docs/firmware.md) |
-| change the desktop app | [Desktop App](docs/desktop-app.md) |
-| know what is missing or planned | [Roadmap](docs/roadmap.md) |
+| If you want to                       | Read                                      |
+| ------------------------------------ | ----------------------------------------- |
+| Set up a sensor and record a session | [User Guide](docs/user-guide.md)          |
+| Build a sensor from parts            | [Hardware Reference](docs/hardware.md)    |
+| Print the case                       | [Enclosure](hardware/enclosure/README.md) |
+| Understand the recorded data format  | [Data Contracts](docs/protocol.md)        |
+| Process recordings offline           | [Analysis Pipeline](docs/analysis.md)     |
+| Set up a development machine         | [Development Guide](docs/development.md)  |
+| Modify the firmware                  | [Firmware Reference](docs/firmware.md)    |
+| Modify the desktop app               | [Desktop App](docs/desktop-app.md)        |
+| See what is planned                  | [Roadmap](docs/roadmap.md)                |
+
+---
 
 ## Status
 
@@ -84,8 +133,10 @@ Active research development at **BCIT** (Vancouver, BC). The firmware, the
 acquisition bridge and the desktop app work end to end; see the
 [Roadmap](docs/roadmap.md) for what is deliberately not built yet.
 
-> Research instrument — **not a medical device**. Nothing here is validated for
+> **Research instrument — not a medical device.** Nothing here is validated for
 > diagnosis, and no claim of clinical accuracy is made.
+
+---
 
 ## Working on PhysDAQ
 
@@ -98,6 +149,8 @@ make help            # every other target
 
 Toolchain setup, the Python environment, the build system and packaging:
 **[Development Guide](docs/development.md)**.
+
+---
 
 ## Licence
 

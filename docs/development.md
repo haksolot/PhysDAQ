@@ -7,27 +7,48 @@ How to set up a machine, build every part of PhysDAQ, and package a release.
 ## Repository layout
 
 ```
-firmware/           Zephyr application (C)
+firmware/           Zephyr application (C) — single-PPG node
   src/              acquisition loop, drivers, power management, BLE
   boards/           DeviceTree overlay for xiao_ble_sense
   dts/bindings/     custom MAX30102 binding
   Kconfig, prj.conf project configuration
+firmware-hub/       Zephyr application (C) — dual-PPG + microSD hub
+  src/              per-sensor threads, storage, command channel, self-test
+  boards/           overlay: I2C mux, two PPG nodes, SPI SD slot
 app/                Electron desktop application
   src/main/         main process — spawns and supervises bridge instances
   src/preload/      contextBridge API surface
   src/renderer/     React UI
+  resources/        firmware UF2s bundled into the installer
   scripts/          build-sidecar.mjs (npm → Python shim)
 scripts/            bridge.py, build/flash helpers, live plotter, env setup
 analysis/           CSV logger, offline pipeline, interactive explorer
-hardware/enclosure/ 3D-printable case
+assets/             logo SVGs, product renders, enclosure CAD (models/*.step)
+hardware/enclosure/ enclosure design notes and print settings
 docs/               this documentation
 west.yml            Zephyr v3.6.0 version lock
 requirements.txt    Python dependencies
 ```
 
+Which directory produces what:
+
+```mermaid
+flowchart LR
+  FW["firmware/"] -- "make build" --> B1["build/zephyr/zephyr.uf2"]
+  HUB["firmware-hub/"] -- "make hub" --> B2["build-hub/zephyr/zephyr.uf2"]
+  BR["scripts/bridge.py"] -- "make sidecar" --> B3["app/sidecar/bridge/"]
+  APP["app/"] -- "npm run build:win / :mac / :linux" --> INST["app/dist/ — installers"]
+
+  B1 -- "CI stages as" --> R1["physdaq.uf2"]
+  B2 -- "CI stages as" --> R2["physdaq-hub.uf2"]
+  R1 & R2 --> RES["app/resources/firmware/"]
+  RES --> APP
+  B3 --> APP
+```
+
 Not in git (all generated): `.west/`, `zephyr/`, `modules/`, `bootloader/`,
-`tools/`, `build/`, `.venv/`, `app/node_modules/`, `app/out/`, `app/dist/`,
-`app/sidecar/`, `logs/*.csv`.
+`tools/`, `build/`, `build-hub/`, `.venv/`, `app/node_modules/`, `app/out/`,
+`app/dist/`, `app/sidecar/`, `app/resources/firmware/*.uf2`, `logs/*.csv`.
 
 ---
 
@@ -39,8 +60,8 @@ Not in git (all generated): `.west/`, `zephyr/`, `modules/`, `bootloader/`,
 | Zephyr SDK | Linux/macOS alternative to the above |
 | west, CMake, Ninja, ARM GCC | Bundled with either toolchain |
 | GNU Make | MinGW `make.exe` from the nRF toolchain, or Git Bash / MSYS2 |
-| Python 3.10+ | For the venv (separate from the toolchain's Python) |
-| Node.js 20+ and npm | For the desktop app |
+| Python 3.10+ | For the venv (separate from the toolchain's Python). CI builds and ships on **3.12**, which is the only version the frozen sidecar is proven against. |
+| Node.js 20+ and npm | For the desktop app. CI uses **20**. |
 
 > **Two Pythons, kept apart.** The nRF toolchain ships its own Python and points
 > `PYTHONPATH`/`PYTHONHOME` at it. The project's own dependencies (numpy, scipy,
@@ -63,6 +84,13 @@ nrfutil install toolchain-manager
 nrfutil toolchain-manager install --ncs-version v3.3.0
 ```
 
+> Newer `nrfutil` (verified on 8.2.0) also carries an `sdk-manager` group, and
+> `nrfutil sdk-manager install v3.3.0` works — but it installs the nRF Connect
+> SDK sources alongside the toolchain, and this repo is its own west workspace
+> (`west.yml`, vendored `zephyr/` and `modules/`), so those sources are dead
+> weight. Install the toolchain only, with the command above. `make env`,
+> `scripts/setup-env.ps1` and this page all print that same form.
+
 Open a toolchain shell (**required in every new terminal**):
 
 ```powershell
@@ -74,6 +102,12 @@ or activate it in an existing PowerShell:
 ```powershell
 . .\scripts\setup-env.ps1
 ```
+
+> `setup-env.ps1` has the toolchain directory **hard-coded** to a specific hash
+> (`C:
+cs	oolchains\<hash>`). A different nRF Connect SDK install puts it
+> elsewhere; edit the path at the top of the script rather than assuming the
+> script is portable.
 
 **Linux / macOS** — install the
 [Zephyr SDK](https://docs.zephyrproject.org/latest/develop/toolchains/zephyr_sdk.html),
@@ -128,6 +162,20 @@ make term       # serial console @115200, port auto-detected
 make clean      # remove build/
 ```
 
+The hub firmware is a separate application with its own build directory, so the
+two coexist instead of pristine-rebuilding each other on every switch:
+
+```bash
+make hub          # incremental → build-hub/zephyr/zephyr.uf2
+make hub-rebuild  # pristine
+make hub-flash    # same bootloader drive, different image
+make hub-clean    # remove build-hub/
+```
+
+Both images run on the same board — nothing on the drive records which one is
+loaded, so keep track of what you flashed. See
+[firmware-hub.md](firmware-hub.md).
+
 ### Desktop app
 
 ```bash
@@ -150,7 +198,12 @@ make ble-log ADDR=E1:23:45:67:89:AB   # …a specific device
 make plot / make ble-plot             # live pyqtgraph dashboard + 3D orientation
 make process FILE=logs/<file>.csv     # offline pipeline
 make explore FILE=logs/<file>.csv     # interactive viewer
+make icons                            # regenerate app icons from the source SVG
 ```
+
+> `make log` and `make plot` parse the **single-PPG** line format. A hub's line
+> carries a second sensor and does not match the logger's stricter regex, so it
+> records a header and no rows, silently. See [analysis.md](analysis.md).
 
 `make help` lists everything.
 
@@ -194,11 +247,13 @@ from inside an archive. That path is what `getBridgeInvocation()` looks for at
 runtime.
 
 `build-sidecar.py` runs the frozen binary once (`--list-ports` as a hard check,
-`--scan` as a soft one, since a missing Bluetooth adapter is not a bundle defect)
+`--scan-all` as a soft one, since a missing Bluetooth adapter is not a bundle
+defect). It is deliberately not `--scan`: the filtered scan legitimately returns
+`[]` when no node is powered on, which would prove nothing about the BLE backend
 before declaring success. A missing hidden import therefore fails at build time
 rather than silently inside the installed app.
 
-The result — `dist/physdaq-1.0.0-setup.exe` — runs on a machine with **no Python,
+The result — `dist/physdaq-<version>-setup.exe`, currently 1.2.0 — runs on a machine with **no Python,
 no venv and no pip installs**. It is roughly 130 MB larger than a bare Electron
 build because numpy, scipy and the WinRT Bluetooth bindings travel with it.
 
@@ -233,19 +288,40 @@ each one freezes its own sidecar.
 To cut a release:
 
 ```bash
-# 1. bump the version in app/package.json, then
-git commit -am "chore: release v1.1.0"
-git tag v1.1.0
+# 1. bump the version in all three places that have to agree:
+#      app/package.json      — the release job refuses a tag that disagrees
+#      firmware/src/version.h, firmware-hub/src/version.h — the ID line and
+#      the session-file header, which is how a recording names its build
+git commit -am "chore: release v1.2.0"
+git tag v1.2.0
 git push && git push --tags
 ```
 
-CI then produces four artifacts and attaches them to a **draft** release:
+The shape is a fan-out and a fan-in:
+
+```mermaid
+flowchart LR
+  TAG(["git push --tags"]) --> FW["firmware job<br/>west build ×2"]
+  FW --> U1["physdaq.uf2"]
+  FW --> U2["physdaq-hub.uf2"]
+  U1 & U2 --> W & M & L
+  W["windows-latest<br/>freeze sidecar → NSIS"]
+  M["macos-latest<br/>freeze sidecar → dmg"]
+  L["ubuntu-latest<br/>freeze sidecar → AppImage + deb"]
+  W & M & L --> REL["release job<br/>merge-multiple: true"]
+  REL --> DRAFT(["draft GitHub release"])
+```
+
+CI then attaches six files to a **draft** release — the four installers plus both
+firmware images, since the release job downloads every artifact and the `firmware`
+artifact's `.uf2` files come along with them:
 
 | Platform | Artifact |
 |---|---|
 | Windows | `physdaq-<version>-setup.exe` (NSIS installer) |
 | macOS (Apple Silicon) | `physdaq-<version>-arm64.dmg` |
 | Linux | `physdaq-<version>-x86_64.AppImage` and a `.deb` |
+| Firmware | `physdaq.uf2`, `physdaq-hub.uf2` |
 
 Review the artifact list, then publish the draft from the GitHub Releases page.
 The tag must match `app/package.json`'s `version` or the release job fails on
@@ -253,17 +329,21 @@ purpose — a release labelled `v1.1.0` full of `1.0.0` artifacts is worse than 
 release. `workflow_dispatch` runs the same matrix without creating a release,
 which is the way to test a pipeline change.
 
-A `firmware` job builds `zephyr.uf2` once and hands it to all three app jobs,
-which stage it at `app/resources/firmware/physdaq.uf2` before electron-builder
-packages it as `extraResources`. That is what lets the installed app flash a node
-without a toolchain (`app/src/main/flasher.ts`). The image is hardware-specific
-rather than host-specific, so it is built once rather than per-OS, and it is also
+A `firmware` job builds **both** images once — `firmware/` into `build/` and
+`firmware-hub/` into `build-hub/` — and hands them to all three app jobs, which
+stage them at `app/resources/firmware/physdaq.uf2` and `physdaq-hub.uf2` before
+electron-builder packages them as `extraResources`. That is what lets the
+installed app flash either board without a toolchain
+(`app/src/main/flasher.ts`). The images are hardware-specific rather than
+host-specific, so they are built once rather than per-OS, and they are also
 attached to the release for anyone who wants to flash by hand.
 
-`*.uf2` is gitignored, so a **local** `npm run build:*` bundles no firmware and
-the app's flash button reports itself unavailable — by design; only CI ships an
-image. In development the flasher instead uses `build/zephyr/zephyr.uf2`, so
-`make build` then `npm run dev` flashes what you just compiled.
+`*.uf2` is gitignored, so a **local** `npm run build:*` bundles whatever happens
+to be sitting in `app/resources/firmware/` — nothing, on a fresh clone, in which
+case the app's flash button reports itself unavailable. Only CI ships images
+reproducibly. In development the flasher instead uses the matching build
+directory (`build/` for a node, `build-hub/` for a hub), so `make build` or
+`make hub` then `npm run dev` flashes what you just compiled.
 
 **What CI deliberately does not do:**
 

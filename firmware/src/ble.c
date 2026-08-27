@@ -65,11 +65,41 @@ BT_GATT_SERVICE_DEFINE(nus_svc,
 			       NULL, on_rx_write, NULL),
 );
 
-/* NUS service UUID in AD so Python BleakScanner can filter by UUID */
+/* Advertising payload.
+ *
+ * The NUS service UUID is here so a scanner can filter on it — that is how
+ * discovery works and the only thing it keys on.
+ *
+ * The manufacturer-specific field carries the device class. Company ID 0xFFFF
+ * is the Bluetooth SIG's reserved "no company / local use" value, which is
+ * what this is: a private hint, not an assigned identifier. bleak strips the
+ * company ID and hands the host the rest:
+ *
+ *   [0] AD protocol version
+ *   [1] device type   (PHYSDAQ_DEV_TYPE_*)
+ *   [2] PPG channel count
+ *   [3] capability flags (PHYSDAQ_DEV_FLAG_*)
+ *
+ * It is a *hint for the scan list only* — it lets the desktop app label an
+ * entry as a hub before connecting. Discovery still filters on the service
+ * UUID and never on this field or on the name, and once connected the ID line
+ * is the authority. The ID line is also the only one of the two that exists on
+ * USB, which has no advertising at all.
+ *
+ * Size: 3 (flags) + 18 (128-bit UUID) + 8 (manufacturer data) = 29 of the 31
+ * bytes an advertising payload allows. The name goes in the scan response, not
+ * here; adding anything further needs that arithmetic redone.
+ */
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS,
 		      (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_NUS_SERVICE_VAL),
+	BT_DATA_BYTES(BT_DATA_MANUFACTURER_DATA,
+		      0xFF, 0xFF,
+		      PHYSDAQ_AD_PROTO_VERSION,
+		      PHYSDAQ_DEV_TYPE_NODE,
+		      1,
+		      0x00),
 };
 
 /* Filled in by set_unique_name() before advertising starts. Not const, and not
@@ -142,9 +172,21 @@ static void on_disconnected(struct bt_conn *conn, uint8_t reason)
 	printk("BLE: disconnected (reason %u) — advertising\n", reason);
 }
 
+/* Log what the central actually granted after the preferred-parameter
+ * request (prj.conf BT_PERIPHERAL_PREF_*). The timeout matters most: with
+ * Windows' short default, a radio fade kills the link instead of just
+ * degrading it — this line is the way to confirm the 5 s request stuck. */
+static void on_param_updated(struct bt_conn *conn, uint16_t interval,
+			     uint16_t latency, uint16_t timeout)
+{
+	printk("BLE: conn params: interval %u ms, latency %u, timeout %u ms\n",
+	       (unsigned int)(interval * 125U / 100U), latency, timeout * 10U);
+}
+
 BT_CONN_CB_DEFINE(conn_cbs) = {
-	.connected    = on_connected,
-	.disconnected = on_disconnected,
+	.connected        = on_connected,
+	.disconnected     = on_disconnected,
+	.le_param_updated = on_param_updated,
 };
 
 int ble_init(void)
@@ -192,6 +234,21 @@ void ble_send(const uint8_t *data, size_t len)
 		}
 		offset += chunk;
 	}
+}
+
+bool ble_is_connected(void)
+{
+	return current_conn != NULL;
+}
+
+const char *ble_device_name(void)
+{
+	/* bt_get_name(), not adv_name: the stack may have truncated the name to
+	 * CONFIG_BT_DEVICE_NAME_MAX, and what is advertised is what it kept.
+	 * adv_name is only the "has set_unique_name() run yet" flag here —
+	 * before it has, bt_get_name() would hand back CONFIG_BT_DEVICE_NAME
+	 * with no per-chip suffix, which is a name no node ever advertises. */
+	return adv_name[0] ? bt_get_name() : "";
 }
 
 void ble_stop(void)

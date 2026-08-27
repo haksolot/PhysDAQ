@@ -20,15 +20,23 @@ imu_init()  →  max30102_init()  →  battery_init()  →  contact_init()
 
 The watchdog is armed **last**, deliberately: init can be slow (I2C probes, BLE
 stack bring-up) and arming earlier would let a legitimate cold start trip it.
+The boot banner and the `ID` line go out once init completes.
 
 Each iteration then:
 
 1. Feeds the watchdog.
 2. Waits up to 200 ms for a PPG_RDY interrupt.
 3. Drains the MAX30102 FIFO; for each PPG sample, fetches a matching IMU sample.
-4. Formats **one** line and sends it to both the USB console and BLE.
-5. Updates contact detection and the idle/power state machine.
-6. Polls the battery (internally rate-limited to once per 5 s).
+4. Formats **one** line and sends it to the USB console at full rate, and to BLE
+   **rate-limited to one line per 40 ms (~25 Hz)** — the link carries about
+   4 kB/s and 100 Hz would overflow the TX queue.
+5. Re-sends the `ID` line if BLE has just become connected.
+6. Updates contact detection and the idle/power state machine.
+7. Polls the battery (internally rate-limited to once per 5 s).
+
+Status and recovery messages are **dual-sent** the same way: the battery line,
+the power line, the stall-recovery notice and the `ID` line all go to both the
+console and BLE, so a wireless host sees the same diagnostics as a wired one.
 
 ### Two independent recovery mechanisms
 
@@ -63,6 +71,7 @@ loop is still happily turning over; without this check the whole pipeline
 | `battery.c/.h` | VBAT sampling and LiPo state-of-charge curve |
 | `watchdog.c/.h` | Hardware watchdog arm + feed |
 | `led.c/.h` | RGB helper over the three onboard LEDs |
+| `version.h` | `PHYSDAQ_FW_STRING` — the single source for the `ID` line and, on the hub, session-file headers |
 
 ### `max30102.c`
 
@@ -87,6 +96,12 @@ that symbol is Nordic Connect SDK-only and does not exist in plain Zephyr.
 
 - Advertises the 128-bit service UUID in the AD payload and the device name in
   the scan response, so hosts can filter by UUID.
+- Also advertises a **manufacturer-specific field** under company ID `0xFFFF`
+  carrying four bytes — AD protocol version, device type (`0x01` node, `0x02`
+  hub), PPG count, and a flags byte whose bit 0 means "has an SD card". That
+  brings the AD payload to 29 of the 31 available bytes. It is a **hint for the
+  host's scan list only**: discovery still filters on the service UUID, and the
+  `ID` line is what actually decides once connected.
 - Names itself `PhysDAQ-XXXX` at boot from the factory device ID, so a scan can
   tell two nodes apart. Needs `CONFIG_BT_DEVICE_NAME_DYNAMIC` and
   `CONFIG_HWINFO`; if hwinfo fails it falls back to the plain configured name
@@ -96,8 +111,26 @@ that symbol is Nordic Connect SDK-only and does not exist in plain Zephyr.
   the remainder on `-ENOMEM` rather than blocking the acquisition loop.
 - Re-advertises automatically on disconnect.
 - `ble_stop()` shuts the controller down cleanly before System Off.
-- The RX characteristic (host → device) is registered but its handler is a no-op,
-  reserved for future downlink commands.
+- `ble_is_connected()` reports link state — the power state machine uses it as a
+  third "do not sleep" condition, and `main.c` watches its rising edge to re-send
+  the `ID` line to a freshly connected host.
+- `ble_device_name()` returns the resolved `PhysDAQ-XXXX` name for the `ID` line.
+- A `le_param_updated` callback logs the interval the central actually granted,
+  which is the only way to tell a negotiated connection from a requested one.
+- The RX characteristic (host → device) is registered but its handler is a no-op
+  on this firmware. The hub wires the same characteristic to its command parser —
+  see [firmware-hub.md](firmware-hub.md#command-channel) — so extending the node
+  is a matter of reusing that code, not designing a channel.
+
+The node emits an identity line at boot and again whenever a host connects:
+
+```
+ID model=node proto=2 fw=1.2.0 ppg=1 sd=0 name=PhysDAQ-FDF9
+```
+
+Field meanings are in [protocol.md](protocol.md#identity-line). The version comes
+from `version.h`, which is also what stamps the hub's session-file headers, so
+the two can never disagree.
 
 ### `led.c`
 
@@ -120,9 +153,13 @@ indication eventually; see [roadmap.md](roadmap.md).
 | `CONFIG_PHYSDAQ_IDLE_TIMEOUT_SEC` | Seconds before deep sleep (default 10) |
 | `CONFIG_BT`, `CONFIG_BT_PERIPHERAL` | BLE stack |
 | `CONFIG_BT_DEVICE_NAME="PhysDAQ"` | Advertised name |
+| `CONFIG_BT_DEVICE_NAME_DYNAMIC`, `CONFIG_BT_DEVICE_NAME_MAX=24`, `CONFIG_HWINFO` | Per-device `PhysDAQ-XXXX` naming at boot |
+| `CONFIG_BT_GAP_AUTO_UPDATE_CONN_PARAMS=y` | What makes the `PREF_*` row below take effect at all |
 | `CONFIG_BT_MAX_CONN=1` | One central at a time |
 | `CONFIG_BT_GATT_CLIENT=y` | Needed for `bt_gatt_exchange_mtu()` **even on a peripheral** |
 | `CONFIG_BT_L2CAP_TX_MTU=247`, `CONFIG_BT_BUF_ACL_*_SIZE=251` | Fit a full data line in one notification |
+| `CONFIG_BT_CTLR_TX_PWR_PLUS_8=y` | +8 dBm radio — margin against body shadowing on a worn node |
+| `CONFIG_BT_PERIPHERAL_PREF_*` | Request 15–30 ms interval + **5 s supervision timeout** so a radio fade degrades throughput instead of dropping the link |
 
 ### `firmware/Kconfig`
 

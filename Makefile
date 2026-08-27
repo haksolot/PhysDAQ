@@ -6,11 +6,18 @@ APP   := firmware
 BUILD := build
 UF2   := $(BUILD)/zephyr/zephyr.uf2
 
+# Hub firmware (dual PPG + microSD). Separate app and build directory so the
+# two firmwares coexist instead of pristine-rebuilding each other on every
+# switch. See docs/firmware-hub.md.
+HUB_APP   := firmware-hub
+HUB_BUILD := build-hub
+HUB_UF2   := $(HUB_BUILD)/zephyr/zephyr.uf2
+
 # Auto-detect virtualenv using Make's wildcard (no shell — works on Windows/Linux/macOS).
 # Checks .venv/Scripts/python.exe (Windows), then .venv/bin/python (Unix), then system python.
 PYTHON := $(or $(wildcard .venv/Scripts/python.exe),$(wildcard .venv/bin/python),python)
 
-.PHONY: all help setup build rebuild flash term plot log process explore ble-log ble-plot sidecar icons clean env
+.PHONY: all help setup build rebuild flash term plot log process explore ble-log ble-plot sidecar icons clean env hub hub-rebuild hub-flash hub-clean
 
 all: build
 
@@ -21,6 +28,11 @@ help:
 	@echo "  make build    Compile firmware (incremental)"
 	@echo "  make rebuild  Pristine build — forces CMake reconfiguration (use after overlay/DTS changes)"
 	@echo "  make flash    Copy UF2 to XIAO-SENSE bootloader drive"
+	@echo ""
+	@echo "  make hub          Compile the hub firmware (dual PPG + microSD)"
+	@echo "  make hub-rebuild  Pristine build of the hub firmware"
+	@echo "  make hub-flash    Copy the hub UF2 to the bootloader drive"
+	@echo "  make hub-clean    Remove the hub build directory"
 	@echo "  make term    Open serial terminal (115200, auto-detect port)"
 	@echo "  make plot    Live gyro plot + 3D orientation (requires: pip install pyqtgraph PyQt6 PyOpenGL imufusion pyserial)"
 	@echo "  make log     Record PPG+IMU to logs/YYYY-MM-DD_HH-MM-SS.csv"
@@ -52,40 +64,62 @@ rebuild:
 flash:
 	@$(PYTHON) scripts/uf2-flash.py $(UF2)
 
+hub:
+	@$(PYTHON) scripts/build-wrapper.py $(BOARD) $(HUB_APP) --build-dir=$(HUB_BUILD)
+
+hub-rebuild:
+	@$(PYTHON) scripts/build-wrapper.py $(BOARD) $(HUB_APP) --build-dir=$(HUB_BUILD) --pristine
+
+hub-flash:
+	@$(PYTHON) scripts/uf2-flash.py $(HUB_UF2)
+
+hub-clean:
+	@$(PYTHON) -c "import shutil, os; shutil.rmtree('$(HUB_BUILD)') if os.path.isdir('$(HUB_BUILD)') else print('Nothing to clean.')"
+
+# The Zephyr toolchain puts its own stdlib on PYTHONPATH, which shadows the
+# venv and breaks numpy. It has to be cleared before Python starts, so an
+# in-script fix is impossible. This used to be an inline `PYTHONPATH= cmd`
+# prefix, which is sh syntax — on Windows make spawns cmd.exe and the recipe
+# died with "'PYTHONPATH' n'est pas reconnu". A target-specific export puts it
+# in the recipe's environment directly, so no shell has to parse it.
+# Deliberately not global: `build`/`hub` invoke west, which NEEDS the
+# toolchain's PYTHONPATH.
+term plot log ble-log ble-plot process explore sidecar icons: export PYTHONPATH :=
+
 term:
-	@PYTHONPATH= $(PYTHON) scripts/term.py
+	@$(PYTHON) scripts/term.py
 
 plot:
-	@PYTHONPATH= $(PYTHON) scripts/plotter.py
+	@$(PYTHON) scripts/plotter.py
 
 log:
-	@PYTHONPATH= $(PYTHON) analysis/logger.py
+	@$(PYTHON) analysis/logger.py
 
 ble-log:
-	@PYTHONPATH= $(PYTHON) analysis/logger.py --ble $(if $(ADDR),--ble-addr=$(ADDR),)
+	@$(PYTHON) analysis/logger.py --ble $(if $(ADDR),--ble-addr=$(ADDR),)
 
 ble-plot:
-	@PYTHONPATH= $(PYTHON) scripts/plotter.py --ble $(if $(ADDR),--ble-addr=$(ADDR),)
+	@$(PYTHON) scripts/plotter.py --ble $(if $(ADDR),--ble-addr=$(ADDR),)
 
 process:
 ifndef FILE
 	@echo "Usage: make process FILE=logs/<filename>.csv"
 else
-	@PYTHONPATH= $(PYTHON) analysis/pipeline.py $(FILE)
+	@$(PYTHON) analysis/pipeline.py $(FILE)
 endif
 
 explore:
 ifndef FILE
 	@echo "Usage: make explore FILE=logs/<filename>.csv"
 else
-	@PYTHONPATH= $(PYTHON) analysis/explore.py $(FILE)
+	@$(PYTHON) analysis/explore.py $(FILE)
 endif
 
 sidecar:
-	@PYTHONPATH= $(PYTHON) scripts/build-sidecar.py $(if $(CLEAN),--clean,)
+	@$(PYTHON) scripts/build-sidecar.py $(if $(CLEAN),--clean,)
 
 icons:
-	@PYTHONPATH= $(PYTHON) scripts/make-icons.py
+	@$(PYTHON) scripts/make-icons.py
 
 clean:
 	@$(PYTHON) -c "import shutil, os; shutil.rmtree('$(BUILD)') if os.path.isdir('$(BUILD)') else print('Nothing to clean.')"
@@ -94,7 +128,7 @@ env:
 	@echo "--- Windows ---"
 	@echo "  1. Install nrfutil: https://www.nordicsemi.com/Products/Development-tools/nRF-Util"
 	@echo "  2. nrfutil install toolchain-manager"
-	@echo "  3. nrfutil sdk-manager install v3.3.0"
+	@echo "  3. nrfutil toolchain-manager install --ncs-version v3.3.0"
 	@echo "  4. Run: nrfutil toolchain-manager launch --terminal --ncs-version v3.3.0"
 	@echo "  5. Inside that shell: cd <repo> && . .\scripts\setup-env.ps1"
 	@echo ""
