@@ -1,6 +1,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
+#include <zephyr/drivers/uart.h>
 #include <zephyr/sys/printk.h>
 #include <hal/nrf_gpio.h>
 #include <hal/nrf_power.h>
@@ -24,6 +25,24 @@ static const struct device *i2c0 = DEVICE_DT_GET(DT_NODELABEL(i2c0));
 
 /* IMU INT1: P0.11 (source: xiao_ble_common.dtsi lsm6ds3tr-c irq-gpios) */
 #define IMU_INT1_ABS_PIN  NRF_GPIO_PIN_MAP(0, 11)
+
+/* The console is a USB CDC ACM port. DTR is asserted by the host for as long
+ * as it holds the port open (pyserial does so by default), so it is the USB
+ * equivalent of ble_is_connected(): a live acquisition session. Without it a
+ * cabled node lying on the desk sleeps after the idle timeout, the virtual
+ * COM port vanishes mid-session, and the host sees a "disconnection". */
+static const struct device *console = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+
+bool power_usb_host_open(void)
+{
+	uint32_t dtr = 0;
+
+	if (!device_is_ready(console) ||
+	    uart_line_ctrl_get(console, UART_LINE_CTRL_DTR, &dtr) != 0) {
+		return false;
+	}
+	return dtr != 0;
+}
 
 static int64_t last_active_ms;  /* last time motion OR validated skin contact
                                   * was seen — drives the sleep decision */
@@ -88,6 +107,7 @@ void power_update(const struct sensor_value gyro[3])
 	bool motion = (gx*gx + gy*gy + gz*gz) > MOTION_THRESH_SQ;
 	bool skin   = contact_is_skin();
 	bool linked = ble_is_connected();
+	bool cabled = power_usb_host_open();
 
 	/* Stay awake if any signal is active: moving, worn-and-still (skin
 	 * contact, no motion — e.g. resting), or a live BLE link. The link
@@ -96,8 +116,9 @@ void power_update(const struct sensor_value gyro[3])
 	 * contact threshold, and a worn-but-still node then hit the idle
 	 * timeout mid-session — the host saw it as a random disconnection.
 	 * Tradeoff: a node left connected never sleeps; disconnect it in the
-	 * app (or close the app) to let it power down. */
-	if (motion || skin || linked) {
+	 * app (or close the app) to let it power down. A host holding the USB
+	 * port open counts for exactly the same reason. */
+	if (motion || skin || linked || cabled) {
 		last_active_ms = now;
 	}
 
@@ -110,7 +131,7 @@ void power_update(const struct sensor_value gyro[3])
 	}
 
 	/* Periodic status line so you can watch the countdown in 'make term'.
-	 * Format:  Power: idle Xs/10s | skin: yes (dc=29050) | ble: yes | peak ~Xmrad/s (thresh 100mrad/s)
+	 * Format:  Power: idle Xs/10s | skin: yes (dc=29050) | ble: yes (dropped 0) | usb: no | peak ~Xmrad/s (thresh 100mrad/s)
 	 * Sent over BLE too: printk only reaches the USB console, and a node
 	 * used wirelessly would otherwise stream zero diagnostics to the app. */
 	if (now - last_status_ms >= STATUS_INTERVAL_MS) {
@@ -119,9 +140,10 @@ void power_update(const struct sensor_value gyro[3])
 		contact_get_debug(&dbg);
 		char sline[128];
 		int sn = snprintk(sline, sizeof(sline),
-		       "Power: idle %ds/%ds | skin: %s (dc=%d) | ble: %s | peak ~%dmrad/s (thresh %dmrad/s)\n",
+		       "Power: idle %ds/%ds | skin: %s (dc=%d) | ble: %s (dropped %u) | usb: %s | peak ~%dmrad/s (thresh %dmrad/s)\n",
 		       idle_s, CONFIG_PHYSDAQ_IDLE_TIMEOUT_SEC, skin ? "yes" : "no",
-		       (int)dbg.dc, linked ? "yes" : "no",
+		       (int)dbg.dc, linked ? "yes" : "no", (unsigned int)ble_tx_dropped(),
+		       cabled ? "yes" : "no",
 		       peak_mrad, MOTION_THRESH_MRAD);
 		printk("%s", sline);
 		ble_send((const uint8_t *)sline, sn);

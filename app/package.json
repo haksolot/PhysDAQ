@@ -1,6 +1,6 @@
 {
   "name": "physdaq",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "PhysDAQ desktop app — live acquisition and recording for the PhysDAQ wearable PPG + IMU sensor",
   "main": "./out/main/index.js",
   "author": "BCIT",

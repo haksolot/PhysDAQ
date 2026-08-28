@@ -14,7 +14,7 @@
  */
 #define PHYSDAQ_FW_MAJOR  1
 #define PHYSDAQ_FW_MINOR  2
-#define PHYSDAQ_FW_PATCH  0
+#define PHYSDAQ_FW_PATCH  1
 #define PHYSDAQ_FW_TWEAK  0
 
 #define PHYSDAQ_FW_STRING \

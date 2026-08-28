@@ -13,6 +13,7 @@
 #include "ppg.h"
 #include "ble.h"
 #include "version.h"
+#include "crashlog.h"
 
 /* Longest command line accepted. Nothing in the grammar comes close; the cap
  * exists so a transport that never sends a newline cannot grow a buffer. */
@@ -142,6 +143,24 @@ void command_send_identity(void)
 	reply("ID model=hub proto=%d fw=%s ppg=%d sd=%d name=%s",
 	      PHYSDAQ_AD_PROTO_VERSION, PHYSDAQ_FW_STRING, PPG_SENSOR_COUNT,
 	      storage_is_active() ? 1 : 0, ble_device_name());
+
+	/* Boot report: why the SoC last started, and what the previous boot
+	 * died of, if it did. These lines already end in a newline, so they
+	 * bypass reply(). */
+	char line[160];
+	int  n = crashlog_format_boot(line, sizeof(line));
+	printk("%s", line);
+	ble_send((const uint8_t *)line, n);
+	n = crashlog_format(line, sizeof(line));
+	if (n > 0) {
+		printk("%s", line);
+		ble_send((const uint8_t *)line, n);
+	}
+	n = crashlog_format_hang(line, sizeof(line));
+	if (n > 0) {
+		printk("%s", line);
+		ble_send((const uint8_t *)line, n);
+	}
 }
 
 /* ── Storage commands ─────────────────────────────────────────────────── */

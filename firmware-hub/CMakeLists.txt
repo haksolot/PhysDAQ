@@ -20,6 +20,7 @@ target_sources(app PRIVATE
     src/battery.c
     src/contact.c
     src/watchdog.c
+    src/crashlog.c
     src/command.c
     src/satellites.c
 )

@@ -134,22 +134,49 @@ and battery lines with regexes and forwards **all other lines to stderr**, which
 the desktop app surfaces in its System Logs pane.
 
 > **USB vs BLE:** `printk()` only reaches the USB console. The battery line, the
-> periodic `Power:` status and the MAX30102 reinit message are explicitly
-> dual-sent over BLE so a wireless node still streams diagnostics to the app;
-> every other line (boot banner, BLE events, watchdog) is USB-only.
+> periodic `Power:` status, the MAX30102 reinit message and the two BLE link
+> diagnostics (`previous link ended`, `conn params`) are explicitly dual-sent
+> over BLE so a wireless node still streams diagnostics to the app; every other
+> line (boot banner, BLE events, watchdog) is USB-only.
 
 ```
 Battery: 71% (3940 mV)
-Power: idle 4s/10s | skin: yes (dc=29050) | ble: yes | peak ~12mrad/s (thresh 100mrad/s)
+Power: idle 4s/10s | skin: yes (dc=29050) | ble: yes (dropped 12) | usb: no | peak ~12mrad/s (thresh 100mrad/s)
 Power: 10 s idle — entering deep sleep (wake on motion)
 MAX30102: ready (SpO2, 100 Hz, 18-bit ADC)
 MAX30102: no data for >1s — reinitialising sensor
 BLE: connected
 BLE: MTU 247 bytes (244 payload)
 BLE: conn params: interval 30 ms, latency 0, timeout 5000 ms
-BLE: disconnected (reason 19) — advertising
+BLE: previous link ended reason=0x08 (supervision timeout (radio fade))
+Boot: cause=0x4 (software (fatal error or reboot)), up 0 s
+Crash: stack overflow (reason 2) in ble_tx pc=0x0002a1c4 lr=0x0002a0f1
+Hang: main starved 3012 ms at stage "printk" (main pending); CPU held by "BT RX" prio -8 pc=0x00031b20
+BLE: disconnected (reason 0x13 closed by host) — advertising
 Watchdog: armed (8000 ms, reset-on-hang)
 ```
+
+The **boot report** — `Boot:` always, `Crash:` and/or `Hang:` only when the
+previous boot ended that way — follows the `ID` line on every new host link
+(BLE subscription or USB port opened). `Boot: cause=` is the nRF reset reason:
+`watchdog`, `software` (a fatal error that `crashlog.c` turned into a reboot),
+`wake from deep sleep`, `reset pin`, `power-on`. `Crash:` names the fault and the
+thread with PC/LR; `Hang:` says where `main()` was stuck and which thread held
+the CPU when the starvation monitor fired 3 s before the watchdog reset. A node
+that "keeps disconnecting" and shows any of these is rebooting, not losing the
+radio — read them before touching the link parameters. `dropped N` in the
+`Power:` line counts BLE lines the node sacrificed because its TX queue was
+full; a steady number is normal, a jump of hundreds is a stall.
+
+`BLE: previous link ended` is sent once, on the first connection after a link
+was lost, and is the only place the *cause* of a drop is visible from the app —
+the OS side (bleak) never reports one. The codes are HCI reasons: `0x08`
+supervision timeout (the radio faded or the node reset), `0x13` the host closed
+it, `0x16` the node closed it, `0x3e` connection failed to establish. The bridge
+logs its own side (`BLE: link to … dropped (reported by the OS N s after the
+last notification)`) so the two can be lined up, and drops a link itself after
+8 s without a notification (`BLE: no data for 8 s — dropping the link to
+reconnect`) rather than sitting on a connection the OS has not noticed is dead.
 
 Plus the boot banner:
 

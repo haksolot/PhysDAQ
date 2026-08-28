@@ -10,14 +10,31 @@
  * Returns 0 on success, negative errno on failure. */
 int ble_init(void);
 
-/* Send data to the connected BLE central (PC).
- * No-op when no central is connected or TX queue is full. */
+/* Queue data for the connected BLE central (PC). Never blocks: copies the
+ * line into a bounded queue drained by a dedicated TX thread, and drops it
+ * when no central is subscribed or the queue is full. See the comment above
+ * tx_thread() in ble.c for why the caller must never touch the radio. */
 void ble_send(const uint8_t *data, size_t len);
+
+/* Lines dropped by ble_send() because the TX queue was full — a growing
+ * number is the "link is degrading" signal. */
+uint32_t ble_tx_dropped(void);
 
 /* True while a central (PC) holds a connection. Used by the power
  * manager: an active link means a live acquisition session, which must
  * hold off the idle deep-sleep timer. */
 bool ble_is_connected(void);
+
+/* True once the central has also subscribed to TX notifications. This, not
+ * ble_is_connected(), is the moment a line can actually reach the host:
+ * a bleak client connects, discovers services, and only then writes the CCC,
+ * so anything notified on the raw connection edge is silently dropped. */
+bool ble_is_subscribed(void);
+
+/* Send link diagnostics recorded by the BT callbacks (why the previous link
+ * ended, which connection parameters the central granted) to a subscribed
+ * host. Cheap no-op when nothing is pending; call from the main loop. */
+void ble_flush_diagnostics(void);
 
 /* Version of the host-facing identification protocol: the manufacturer-specific
  * AD payload and the ID line. Bump when either layout changes; a host that

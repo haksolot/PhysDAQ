@@ -24,6 +24,24 @@
 #define BT_UUID_NUS_TX      BT_UUID_DECLARE_128(BT_UUID_NUS_TX_VAL)
 #define BT_UUID_NUS_RX      BT_UUID_DECLARE_128(BT_UUID_NUS_RX_VAL)
 
+/* One queued line is at most a full sample line (main.c formats into 160 B).
+ * Depth: at ~25 Hz a line every 40 ms, 16 slots is ~0.6 s of back-pressure
+ * before lines start being dropped — enough to ride through a short fade
+ * without growing an unbounded backlog of stale samples. */
+#define TX_MSG_MAX       160
+#define TX_QUEUE_DEPTH   16
+#define TX_THREAD_STACK  2048
+/* Below main (0): the acquisition loop always wins the CPU. */
+#define TX_THREAD_PRIO   7
+
+struct tx_msg {
+	uint16_t len;
+	uint8_t  data[TX_MSG_MAX];
+};
+
+K_MSGQ_DEFINE(tx_q, sizeof(struct tx_msg), TX_QUEUE_DEPTH, 4);
+
+
 static struct bt_conn              *current_conn;
 static bool                         notify_enabled;
 static struct bt_gatt_exchange_params mtu_params;
@@ -175,6 +193,9 @@ static void on_disconnected(struct bt_conn *conn, uint8_t reason)
 		current_conn   = NULL;
 		notify_enabled = false;
 	}
+	/* Whatever is queued was meant for this link; a new host should not
+	 * start with a burst of stale samples. */
+	k_msgq_purge(&tx_q);
 	bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 	printk("BLE: disconnected (reason %u) — advertising\n", reason);
 }
@@ -218,29 +239,83 @@ int ble_init(void)
 	return 0;
 }
 
+/* BLE transmit path.
+ *
+ * bt_gatt_notify() is not the fire-and-forget call it looks like. For a
+ * notification the host stack allocates the ATT PDU with K_FOREVER
+ * (zephyr/subsys/bluetooth/host/att.c, bt_att_chan_create_pdu), so once the
+ * ACL TX buffers are exhausted — a radio fade, a central that stops acking,
+ * an MTU still at 23 B turning each line into six packets — the caller sleeps
+ * until a buffer frees, which can be never. Called from main(), that sleep
+ * starved the watchdog: a node streaming perfectly over USB reset itself 8 s
+ * after the link degraded, with no message on either transport, and the host
+ * saw it as a random disconnection (Boot: cause=watchdog on the next link).
+ *
+ * So main() never calls bt_gatt_notify(). ble_send() copies the line into a
+ * bounded message queue with K_NO_WAIT and drops it if the queue is full;
+ * a dedicated low-priority thread drains the queue and is the only thing that
+ * ever blocks on the radio. Losing lines under back-pressure is the intended
+ * behaviour — the link is rate-limited to ~25 Hz in main.c precisely because
+ * the display does not need every sample — and a stuck TX thread costs
+ * nothing but those lines until the link drops and the buffers come back. */
+static uint32_t tx_dropped;
+
+static void tx_thread(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
+	struct tx_msg msg;
+
+	while (1) {
+		k_msgq_get(&tx_q, &msg, K_FOREVER);
+
+		/* Re-check here, not only in ble_send(): the link may have gone
+		 * away while the message sat in the queue. */
+		struct bt_conn *conn = current_conn;
+		if (!conn || !notify_enabled) {
+			continue;
+		}
+
+		uint16_t payload = bt_gatt_get_mtu(conn) - 3;
+		/* Clamp in case MTU not yet negotiated or returns an odd value */
+		if (payload < 20 || payload > 244) {
+			payload = 20;
+		}
+
+		size_t offset = 0;
+		while (offset < msg.len) {
+			size_t chunk = MIN(payload, msg.len - offset);
+			/* May block — that is this thread's job. -ENOTCONN or
+			 * -ENOMEM: drop the rest of the line, never retry. */
+			if (bt_gatt_notify(conn, &nus_svc.attrs[2],
+					   msg.data + offset, chunk)) {
+				break;
+			}
+			offset += chunk;
+		}
+	}
+}
+
+K_THREAD_DEFINE(ble_tx, TX_THREAD_STACK, tx_thread, NULL, NULL, NULL,
+		TX_THREAD_PRIO, 0, 0);
+
 void ble_send(const uint8_t *data, size_t len)
 {
 	if (!current_conn || !notify_enabled) {
 		return;
 	}
 
-	uint16_t payload = bt_gatt_get_mtu(current_conn) - 3;
-	/* Safety: clamp in case MTU not yet negotiated or returns unexpected value */
-	if (payload < 20 || payload > 244) {
-		payload = 20;
-	}
+	struct tx_msg msg;
+	msg.len = MIN(len, sizeof(msg.data));
+	memcpy(msg.data, data, msg.len);
 
-	size_t offset = 0;
-	while (offset < len) {
-		size_t chunk = MIN(payload, len - offset);
-		int err = bt_gatt_notify(current_conn, &nus_svc.attrs[2],
-					 data + offset, chunk);
-		if (err) {
-			/* TX queue full (-ENOMEM) or disconnected — drop rest of sample */
-			return;
-		}
-		offset += chunk;
+	if (k_msgq_put(&tx_q, &msg, K_NO_WAIT) != 0) {
+		tx_dropped++;
 	}
+}
+
+uint32_t ble_tx_dropped(void)
+{
+	return tx_dropped;
 }
 
 bool ble_is_connected(void)

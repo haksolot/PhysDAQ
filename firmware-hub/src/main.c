@@ -13,6 +13,7 @@
 #include "version.h"
 #include "command.h"
 #include "satellites.h"
+#include "crashlog.h"
 
 /* Format a sensor_value (val1 + val2/1e6) as "±integer.milli" using printk.
  * Mirrors the print_val helper in imu.c, kept local to avoid coupling. */
@@ -119,6 +120,10 @@ static void send_hub_status(void)
 
 int main(void)
 {
+	/* Before anything else: captures the previous boot's crash/hang record
+	 * and the reset cause while nothing has had a chance to clobber them. */
+	crashlog_init();
+
 	/* Bus self-test first, before anything that depends on the bus. On a
 	 * hand-wired prototype the difference between "the mux is missing" and
 	 * "the sensor behind the mux is missing" is the difference between two
