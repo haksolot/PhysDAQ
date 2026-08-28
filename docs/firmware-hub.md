@@ -250,6 +250,9 @@ Believe its output over the breakout's silk screen.
   configuration is the node's: `wdt0`, 8 s, `WDT_FLAG_RESET_SOC`,
   `WDT_OPT_PAUSE_HALTED_BY_DBG`, and deliberately **not**
   `WDT_OPT_PAUSE_IN_SLEEP`.
+- **Fatal errors reboot, and are reported.** `crashlog.c` overrides the fatal
+  handler (noinit-RAM record + immediate reboot) exactly as on the node; the
+  default halt left the hub silent for 8 s until the watchdog fired.
 - **A missing card is not fatal.** Acquisition still runs and streams over BLE;
   the boot banner says `Storage: UNAVAILABLE` loudly.
 - **Sleep closes the session file.** `power.c` calls `storage_close()` before
@@ -436,6 +439,13 @@ and reinit counters, and storage statistics.
 
 Still rate-limited to ~25 Hz. The link carries ~4 kB/s; the raw two-sensor
 stream is several times that and would overflow the TX queue.
+
+The transmit path is the node's, verbatim: `ble_send()` only queues, a dedicated
+TX thread is the only caller of `bt_gatt_notify()` (which blocks with `K_FOREVER`
+on buffer exhaustion — see [firmware.md](firmware.md#blec)), the controller runs
+Data Length Extension, and the connection-parameter auto-update is off. The
+`ID` line is followed by the same boot report (`Boot:` / `Crash:` / `Hang:`),
+emitted from `command_send_identity()`; `crashlog.c` owns the reset cause here.
 
 ---
 

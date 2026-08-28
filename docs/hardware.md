@@ -200,18 +200,19 @@ Source: `firmware/src/battery.c`. The overlay declares the `battery_divider`
 ## Power management
 
 The firmware enters **nRF System Off** (~0.4 µA) after a configurable period of
-inactivity. "Inactivity" means **all three** of: no gyroscope motion, no IR
-contact, and **no BLE link** — so wearing the device while sitting perfectly
-still (resting, sleeping) does *not* trigger sleep, and neither does a node
-sitting on the bench with the desktop app connected to it. Only setting it down,
-unworn and unconnected, does.
+inactivity. "Inactivity" means **all** of: no gyroscope motion, no IR contact,
+and **no host link** (neither a BLE connection nor a USB port held open, seen as
+CDC DTR) — so wearing the device while sitting perfectly still (resting,
+sleeping) does *not* trigger sleep, and neither does a node sitting on the bench
+with the desktop app connected to it, by radio or by cable. Only setting it
+down, unworn and unconnected, does.
 
 ```mermaid
 stateDiagram-v2
   direction LR
   [*] --> Awake
-  Awake --> Awake: motion, or skin contact,<br/>or BLE connected — timer resets
-  Awake --> Sleeping: none of the three<br/>for IDLE_TIMEOUT_SEC
+  Awake --> Awake: motion, or skin contact,<br/>or BLE / USB host link — timer resets
+  Awake --> Sleeping: none of them<br/>for IDLE_TIMEOUT_SEC
   Sleeping --> Awake: IMU INT1 asserts (~125 mg)<br/>GPIO DETECT → full CPU reset
   note right of Sleeping
     System Off, ~0.4 µA

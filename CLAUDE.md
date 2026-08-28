@@ -49,6 +49,17 @@ targets — see [docs/development.md](docs/development.md).
   against idles the CPU on a `K_FOREVER` I2C wait.
 - **BLE stays rate-limited to ~25 Hz** in `main.c`. The link carries ~4 kB/s;
   100 Hz would be ~12 kB/s and overflows the TX queue.
+- **Only the `ble_tx` thread calls `bt_gatt_notify()`.** It blocks with
+  `K_FOREVER` when TX buffers run out (Zephyr `att.c`); called from `main()` it
+  starved the watchdog and reset the node mid-session. `ble_send()` only queues.
+- **`CONFIG_BT_GAP_AUTO_UPDATE_CONN_PARAMS` stays off** on both firmwares — the
+  node crashed within a second of the update being applied on Windows.
+- **The watchdog is fed inside the FIFO-drain loop too**, not only per outer
+  iteration; the inner loop does not exit while the FIFO keeps refilling.
+- **`crashlog.c` must stay the fatal-error handler.** Zephyr's default halts
+  with interrupts locked and the crash is invisible; a node that "keeps
+  disconnecting" with `Boot: cause=watchdog` and no `Crash:`/`Hang:` line is
+  the signature of losing it.
 - **Do not `setState` per sample in the renderer.** Samples are coalesced into
   one update per animation frame; per-sample updates froze the UI. Charts write
   to a ref and render from their own rAF loop.

@@ -594,6 +594,9 @@ def ble_reader(addr_hint):
 
     NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
     NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+    # Longer than the 5 s supervision timeout the firmware asks for, so a
+    # fade the radio itself rides out never trips this first.
+    BLE_STALL_S = 8.0
     NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 
     async def _run():
@@ -668,17 +671,30 @@ def ble_reader(addr_hint):
                 print(json.dumps({"status": "connecting"}), flush=True)
 
                 buf = ""
+                last_rx = time.monotonic()
                 def on_notify(char, data):
-                    nonlocal buf
+                    nonlocal buf, last_rx
+                    last_rx = time.monotonic()
                     buf += data.decode("utf-8", errors="replace")
                     while "\n" in buf:
                         line, buf = buf.split("\n", 1)
                         process_sample(line)
 
-                async with BleakClient(device, timeout=10.0) as client:
+                # The OS says the link went away but never why; the node knows
+                # and reports it on the next connection ("BLE: previous link
+                # ended reason=..."). Timestamping this side lets the two be
+                # lined up in the System Logs pane.
+                def on_disconnect(_client):
+                    sys.stderr.write(
+                        f"BLE: link to {active_addr} dropped (reported by the OS "
+                        f"{time.monotonic() - last_rx:.1f} s after the last notification)\n")
+
+                async with BleakClient(device, timeout=10.0,
+                                       disconnected_callback=on_disconnect) as client:
                     sys.stderr.write(f"Bridge connected to BLE {active_addr}\n")
                     print(json.dumps({"status": "connected", "ble_addr": active_addr}), flush=True)
                     await client.start_notify(NUS_TX_UUID, on_notify)
+                    last_rx = time.monotonic()
 
                     # Drop anything queued while disconnected: a command sent
                     # to the previous link is stale by definition, and
@@ -690,6 +706,18 @@ def ble_reader(addr_hint):
                     try:
                         while client.is_connected:
                             await asyncio.sleep(0.5)
+                            # Zombie-link guard. The node streams a line every
+                            # 40 ms and a status line every 5 s regardless, so
+                            # a connected client that hears nothing for this
+                            # long holds a link the OS has not yet noticed is
+                            # dead (WinRT can sit there a long time). Tearing
+                            # it down ourselves turns an indefinite freeze
+                            # into a ~2 s reconnect.
+                            if time.monotonic() - last_rx > BLE_STALL_S:
+                                sys.stderr.write(
+                                    f"BLE: no data for {BLE_STALL_S:.0f} s — "
+                                    "dropping the link to reconnect\n")
+                                break
                     finally:
                         writer_task.cancel()
             except Exception as e:

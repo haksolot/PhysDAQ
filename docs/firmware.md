@@ -43,12 +43,29 @@ console and BLE, so a wireless host sees the same diagnostics as a wired one.
 These solve different failure modes and neither substitutes for the other:
 
 **Watchdog — the CPU stopped.** `wdt0`, 8 s window, `WDT_FLAG_RESET_SOC`. Fed
-once per outer iteration; the loop turns over at least every 200 ms, so if
-anything blocks forever (a wedged I2C transfer is the realistic case) the feeds
-stop and the SoC resets itself. Configured with `WDT_OPT_PAUSE_HALTED_BY_DBG` but
-deliberately **not** `WDT_OPT_PAUSE_IN_SLEEP` — the exact freeze it guards against
-idles the CPU on a `K_FOREVER` I2C wait, and pausing in sleep would disarm it
-precisely when it is needed.
+at the top of the outer loop **and once per sample inside the FIFO-drain loop** —
+that inner loop only exits once the FIFO is empty, and when a sample's worth of
+work takes longer than the 10 ms sample period it never does, so an outer-only
+feed reset a node that was streaming perfectly. Configured with
+`WDT_OPT_PAUSE_HALTED_BY_DBG` but deliberately **not** `WDT_OPT_PAUSE_IN_SLEEP` —
+the exact freeze it guards against idles the CPU on a `K_FOREVER` I2C wait, and
+pausing in sleep would disarm it precisely when it is needed.
+
+A kernel timer in `watchdog.c` watches the feeds: after 3 s without one it records
+where `main()` is (the `watchdog_set_stage()` marker), what the kernel thinks of
+it, and which thread holds the CPU with its PC — into noinit RAM via
+`crashlog.c`, then to the console. The record survives the reset and is sent to
+the host on the next boot as a `Hang:` line.
+
+**Fatal errors — the CPU crashed.** Vanilla Zephyr's fatal handler ends in
+`arch_system_halt()`: interrupts locked, spin forever. On this board that made a
+crash indistinguishable from a hang: the dump sat in the USB CDC ring buffer with
+the USB interrupt unable to run, the host saw a supervision timeout, the watchdog
+reset 8 s later and the next boot said `cause=watchdog`. `crashlog.c` overrides
+`k_sys_fatal_error_handler()` to store reason, PC, LR and thread in noinit RAM
+and reboot at once; the next boot reports it as a `Crash:` line on both
+transports (`Boot: cause=…` always accompanies it). Resolve addresses with
+`arm-zephyr-eabi-addr2line -e build/zephyr/zephyr.elf 0x…`.
 
 **Sensor-stall recovery — the CPU is fine, the sensor isn't.** If the FIFO yields
 nothing for more than 1 s, `max30102_init()` is re-run. This recovers the I2C bus
@@ -66,10 +83,11 @@ loop is still happily turning over; without this check the whole pipeline
 | `max30102.c/.h` | Register-level I2C driver for the PPG front end |
 | `imu.c/.h` | Thin wrapper over Zephyr's `st_lsm6dsl` driver |
 | `ble.c/.h` | NUS-compatible GATT service, advertising, MTU negotiation |
-| `power.c/.h` | Idle detection, deep sleep, wake-on-motion configuration |
+| `power.c/.h` | Idle detection, deep sleep, wake-on-motion configuration. Reads DTR on the CDC console (`CONFIG_UART_LINE_CTRL`) so a host holding the USB port open holds off sleep like a BLE link does |
 | `contact.c/.h` | Skin-contact detection from the IR DC level |
 | `battery.c/.h` | VBAT sampling and LiPo state-of-charge curve |
-| `watchdog.c/.h` | Hardware watchdog arm + feed |
+| `watchdog.c/.h` | Hardware watchdog arm + feed, plus the starvation monitor (kernel timer) |
+| `crashlog.c/.h` | Fatal-error handler override, noinit-RAM crash/hang records, reported on the next boot |
 | `led.c/.h` | RGB helper over the three onboard LEDs |
 | `version.h` | `PHYSDAQ_FW_STRING` — the single source for the `ID` line and, on the hub, session-file headers |
 
@@ -107,13 +125,32 @@ that symbol is Nordic Connect SDK-only and does not exist in plain Zephyr.
   `CONFIG_HWINFO`; if hwinfo fails it falls back to the plain configured name
   rather than refusing to advertise.
 - Requests an MTU exchange on connect and logs the negotiated value.
-- `ble_send()` chunks payloads by `MTU − 3` (clamped to 20–244 bytes) and drops
-  the remainder on `-ENOMEM` rather than blocking the acquisition loop.
-- Re-advertises automatically on disconnect.
+- `ble_send()` **never touches the radio.** It copies the line into a bounded
+  message queue (16 × 160 B, `K_NO_WAIT`, dropped when full — `ble_tx_dropped()`
+  counts them, shown as `dropped N` in the `Power:` line) and a dedicated
+  low-priority TX thread drains it, chunking by `MTU − 3`. This is not a style
+  choice: `bt_gatt_notify()` allocates its PDU with `K_FOREVER`
+  (`zephyr/subsys/bluetooth/host/att.c`, `bt_att_chan_create_pdu`) and blocks
+  indefinitely once the ACL TX buffers are exhausted. Called from `main()`, that
+  sleep starved the watchdog and reset the node mid-session.
+- The controller runs LL Data Length Extension (`CONFIG_BT_CTLR_DATA_LENGTH_MAX=251`).
+  Without it the 27 B LL default split each ~120 B line into five packets and
+  saturated the link at Windows' 30 ms interval. TX pools are 6 deep.
+- `CONFIG_BT_GAP_AUTO_UPDATE_CONN_PARAMS` is **off**. With it on, the node crashed
+  within a second of the central applying the update, every time, on Windows.
+  The `BT_PERIPHERAL_PREF_*` values are kept in `prj.conf` for when that is
+  understood.
+- Re-advertises automatically on disconnect, and remembers the HCI reason. It
+  is sent to the host on the next connection (`BLE: previous link ended
+  reason=…`) via `ble_flush_diagnostics()`, called from the main loop — the
+  callbacks only record, they never notify. The granted connection parameters
+  are reported the same way.
 - `ble_stop()` shuts the controller down cleanly before System Off.
 - `ble_is_connected()` reports link state — the power state machine uses it as a
-  third "do not sleep" condition, and `main.c` watches its rising edge to re-send
-  the `ID` line to a freshly connected host.
+  "do not sleep" condition. `ble_is_subscribed()` additionally requires the CCC
+  write, and that is the edge `main.c` watches to re-send the `ID` line: on the
+  bare connection edge the host has not enabled notifications yet and the line
+  was silently dropped.
 - `ble_device_name()` returns the resolved `PhysDAQ-XXXX` name for the `ID` line.
 - A `le_param_updated` callback logs the interval the central actually granted,
   which is the only way to tell a negotiated connection from a requested one.

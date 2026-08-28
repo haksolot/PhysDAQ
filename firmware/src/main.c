@@ -9,6 +9,8 @@
 #include "contact.h"
 #include "watchdog.h"
 #include "version.h"
+#include "crashlog.h"
+#include <zephyr/drivers/hwinfo.h>
 
 /* Format a sensor_value (val1 + val2/1e6) as "±integer.milli" using printk.
  * Mirrors the print_val helper in imu.c, kept local to avoid coupling. */
@@ -27,6 +29,26 @@
  * the boot copy, and on USB the console does not exist yet while the board
  * boots, so the boot copy is routinely lost there too.
  */
+/* Why the SoC last started. Read once at boot and cleared, then repeated to
+ * every host that connects: a node that keeps "disconnecting" over BLE may
+ * in fact be rebooting, and this is the only way to tell a watchdog reset
+ * (main loop hung) from a fatal error (crash) or wake-from-System-Off
+ * without a cable on the console. */
+static uint32_t boot_cause;
+static int64_t  boot_ms;
+
+static const char *boot_cause_str(uint32_t c)
+{
+    if (c & RESET_WATCHDOG)      return "watchdog";
+    if (c & RESET_SOFTWARE)      return "software (fatal error or reboot)";
+    if (c & RESET_LOW_POWER_WAKE) return "wake from deep sleep";
+    if (c & RESET_PIN)           return "reset pin";
+    if (c & RESET_POR)           return "power-on";
+    if (c & RESET_BROWNOUT)      return "brownout";
+    if (c & RESET_DEBUG)         return "debugger";
+    return "unknown";
+}
+
 static void send_identity(void)
 {
     char line[128];
@@ -36,10 +58,35 @@ static void send_identity(void)
 
     printk("%s", line);
     ble_send((const uint8_t *)line, n);
+
+    n = snprintk(line, sizeof(line),
+        "Boot: cause=0x%x (%s), up %lld s\n",
+        (unsigned int)boot_cause, boot_cause_str(boot_cause),
+        (long long)((k_uptime_get() - boot_ms) / 1000));
+    printk("%s", line);
+    ble_send((const uint8_t *)line, n);
+
+    n = crashlog_format(line, sizeof(line));
+    if (n > 0) {
+        printk("%s", line);
+        ble_send((const uint8_t *)line, n);
+    }
+    n = crashlog_format_hang(line, sizeof(line));
+    if (n > 0) {
+        printk("%s", line);
+        ble_send((const uint8_t *)line, n);
+    }
 }
 
 int main(void)
 {
+    boot_ms = k_uptime_get();
+    crashlog_init();
+    if (hwinfo_get_reset_cause(&boot_cause) == 0) {
+        /* Cleared so the next boot reports its own cause, not this one. */
+        hwinfo_clear_reset_cause();
+    }
+
     if (imu_init() < 0) {
         return 0;
     }
@@ -84,29 +131,50 @@ int main(void)
          * indefinitely. */
         watchdog_feed();
 
-        /* Rising edge of the BLE link: a central that just connected has not
-         * seen the boot copy of the identity line. */
+        /* Rising edge of a host link, on either transport. BLE: keyed on the
+         * *subscription*, not the connection — on the connection edge the
+         * central has not enabled notifications yet and ble_send() drops the
+         * line. USB: keyed on DTR — the console does not exist while the
+         * board boots, so the boot copy is routinely lost there, and this is
+         * what makes the ID and Boot lines show up in `make term`. */
         static bool was_linked;
-        bool linked = ble_is_connected();
+        watchdog_set_stage("identity");
+        bool linked = ble_is_subscribed() || power_usb_host_open();
         if (linked && !was_linked) {
             send_identity();
         }
         was_linked = linked;
+        watchdog_set_stage("diagnostics");
+        ble_flush_diagnostics();
 
         /* Wait for a PPG_RDY interrupt, or fall through on the timeout. The
          * timeout path is harmless and self-healing: max30102_wait_ready()
          * clears the interrupt flag on every wake, and max30102_fetch() polls
          * the FIFO (returning -ENODATA when empty), so a missed edge costs one
          * timeout of latency rather than a permanent stall. */
+        watchdog_set_stage("wait_ready");
         max30102_wait_ready(K_MSEC(200));
 
         struct ppg_sample ppg;
         struct imu_sample imu;
         bool got_data = false;
 
+        watchdog_set_stage("ppg_fetch");
         while (max30102_fetch(&ppg) == 0) {
+            /* Fed here as well as at the top of the outer loop. This inner
+             * loop only exits once the FIFO is empty, and when one sample's
+             * worth of work (I2C reads, a 120 B printk over USB CDC, a BLE
+             * notify) takes longer than the 10 ms sample period the FIFO
+             * never empties — the loop spins healthily forever, the outer
+             * feed is never reached, and the watchdog resets a node that was
+             * streaming perfectly, with no message on either transport. That
+             * was the "silent drop mid-stream" signature. A hang inside this
+             * loop (wedged I2C) still stops the feeds, so the guard holds. */
+            watchdog_feed();
             got_data = true;
+            watchdog_set_stage("imu_fetch");
             if (imu_fetch_sample(&imu) < 0) {
+                watchdog_set_stage("ppg_fetch");
                 continue;
             }
 
@@ -124,6 +192,7 @@ int main(void)
                 SV_SIGN(&imu.gyro[1]),  SV_INT(&imu.gyro[1]),  SV_MILLI(&imu.gyro[1]),
                 SV_SIGN(&imu.gyro[2]),  SV_INT(&imu.gyro[2]),  SV_MILLI(&imu.gyro[2]));
 
+            watchdog_set_stage("printk");
             printk("%s", line);
 
             /* BLE link can carry ~4 kB/s at default Windows connection params.
@@ -133,16 +202,20 @@ int main(void)
             int64_t now_ms = k_uptime_get();
             if (now_ms - ble_last_ms >= 40) {
                 ble_last_ms = now_ms;
+                watchdog_set_stage("ble_send");
                 ble_send((const uint8_t *)line, n);
             }
 
+            watchdog_set_stage("contact");
             contact_update(ppg.ir);
+            watchdog_set_stage("power");
             power_update(imu.gyro);
 
             /* Internally rate-limited to once every 5 s — cheap to call
              * every sample. */
             uint8_t batt_pct;
             int32_t batt_mv;
+            watchdog_set_stage("battery");
             if (battery_poll(&batt_pct, &batt_mv) == 0) {
                 char batt_line[48];
                 int batt_n = snprintk(batt_line, sizeof(batt_line),
@@ -150,6 +223,7 @@ int main(void)
                 printk("%s", batt_line);
                 ble_send((const uint8_t *)batt_line, batt_n);
             }
+            watchdog_set_stage("ppg_fetch");
         }
 
         /* Sensor-stall recovery. If the FIFO produced nothing for over a
@@ -169,6 +243,7 @@ int main(void)
                 "MAX30102: no data for >1s — reinitialising sensor\n";
             printk("%s", reinit_msg);
             ble_send((const uint8_t *)reinit_msg, sizeof(reinit_msg) - 1);
+            watchdog_set_stage("max30102_reinit");
             max30102_init();
             last_data_ms = k_uptime_get();
         }

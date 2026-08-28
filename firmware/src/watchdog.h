@@ -8,4 +8,9 @@
 int watchdog_init(void);
 void watchdog_feed(void);
 
+/* Name the step main() is about to perform. Costs one pointer store; read by
+ * the starvation monitor to say *where* main hung before the WDT resets. The
+ * string must be a literal (it is kept by pointer, not copied). */
+void watchdog_set_stage(const char *s);
+
 #endif /* PHYSDAQ_WATCHDOG_H */

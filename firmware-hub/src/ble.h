@@ -10,9 +10,15 @@
  * Returns 0 on success, negative errno on failure. */
 int ble_init(void);
 
-/* Send data to the connected BLE central (PC).
- * No-op when no central is connected or TX queue is full. */
+/* Queue data for the connected BLE central (PC). Never blocks: copies the
+ * line into a bounded queue drained by a dedicated TX thread, and drops it
+ * when no central is subscribed or the queue is full. See the comment above
+ * tx_thread() in ble.c for why the caller must never touch the radio. */
 void ble_send(const uint8_t *data, size_t len);
+
+/* Lines dropped by ble_send() because the TX queue was full — a growing
+ * number is the "link is degrading" signal. */
+uint32_t ble_tx_dropped(void);
 
 /* True while a central (PC) holds a connection. Used by the power
  * manager: an active link means a live acquisition session, which must
