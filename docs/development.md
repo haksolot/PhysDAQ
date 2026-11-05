@@ -55,7 +55,8 @@ Not in git (all generated): `.west/`, `zephyr/`, `modules/`, `bootloader/`,
 `tools/`, `build/`, `build-hub/`, `.venv/`, `app/node_modules/`, `app/out/`,
 `app/dist/`, `app/sidecar/`, `app/resources/firmware/*.uf2`, `logs/*.csv`,
 `android/.gradle/`, `android/build/`, `android/app/build/`, `android/.idea/`,
-`android/local.properties`.
+`android/local.properties`, `android/keystore.properties` and any `*.jks` /
+`*.keystore` (the release key: back it up, never commit it).
 
 > The root `tools/` folder is ignored (it holds the Zephyr toolchain). Python
 > helpers for the Android app live in `android/tools/`, which is tracked.
@@ -228,6 +229,107 @@ Architecture, file formats and rules: [android-app.md](android-app.md).
 - The UI (Compose), the BLE client and MediaStore are not unit-tested; check them
   on a phone.
 
+### Android release APK
+
+An APK is the installable app file. There are two kinds:
+
+| | Debug APK | Release APK |
+|---|---|---|
+| Build | `./gradlew assembleDebug` | `./gradlew assembleRelease` (or CI, below) |
+| Output | `app/build/outputs/apk/debug/app-debug.apk` | `app/build/outputs/apk/release/app-release.apk` |
+| Signed with | the debug key of **that** PC | the project's **release key** |
+| Use | your own phone while developing | anything you hand to someone else |
+
+Android only installs an update over an app signed with the **same key**. Each PC
+has its own debug key, so debug APKs from different machines cannot update each
+other. Release APKs always can, as long as the release key is kept.
+
+#### One-time: create the release key
+
+In Android Studio: *Build → Generate Signed App Bundle or APK → APK → Create new…*.
+Save it **outside the repo** (for example `C:/Users/<you>/keys/physdaq-release.jks`),
+alias `physdaq`, validity 25 years or more. Or from a terminal (`keytool` is in
+Android Studio's `jbr/bin`):
+
+```bash
+keytool -genkeypair -v -keystore physdaq-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias physdaq
+```
+
+> ⚠️ **Back the key file and its passwords up somewhere safe** (not git). If it is
+> lost, no future APK can update installed copies: every phone has to uninstall,
+> which also hides old recordings from the Library.
+
+Then create `android/keystore.properties` (ignored by git):
+
+```properties
+storeFile=C:/Users/<you>/keys/physdaq-release.jks
+storePassword=...
+keyAlias=physdaq
+keyPassword=...
+```
+
+#### One-time: tell Gradle to use it
+
+In `android/app/build.gradle.kts`, add at the very top:
+
+```kotlin
+import java.util.Properties
+
+// Release signing: environment variables (CI) or android/keystore.properties (your PC).
+val signingProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingValue(env: String, prop: String): String? =
+    System.getenv(env) ?: signingProps.getProperty(prop)
+```
+
+and inside the `android { }` block:
+
+```kotlin
+    signingConfigs {
+        signingValue("PHYSDAQ_KEYSTORE", "storeFile")?.let { path ->
+            create("release") {
+                storeFile = file(path)
+                storePassword = signingValue("PHYSDAQ_KEYSTORE_PASSWORD", "storePassword")
+                keyAlias = signingValue("PHYSDAQ_KEY_ALIAS", "keyAlias")
+                keyPassword = signingValue("PHYSDAQ_KEY_PASSWORD", "keyPassword")
+            }
+        }
+    }
+```
+
+and in the existing `buildTypes { release { ... } }` block:
+
+```kotlin
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+```
+
+`./gradlew assembleRelease` now produces a signed `app-release.apk`. With no key
+configured it still builds, but the APK is unsigned and will not install.
+
+#### One-time: let CI sign it
+
+[`.github/workflows/android-apk.yml`](../.github/workflows/android-apk.yml) runs the
+tests and builds the APK on every version tag, and attaches it to that tag's
+release as `PhysDAQ-Android-<tag>.apk`. Give it the key as four repository secrets
+(*Settings → Secrets and variables → Actions*):
+
+| Secret | Value |
+|---|---|
+| `PHYSDAQ_KEYSTORE_BASE64` | the `.jks` file as base64 (below) |
+| `PHYSDAQ_KEYSTORE_PASSWORD` | store password |
+| `PHYSDAQ_KEY_ALIAS` | `physdaq` |
+| `PHYSDAQ_KEY_PASSWORD` | key password |
+
+```powershell
+# Windows: copy the key file as base64 to the clipboard, then paste it as the secret
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\Users\<you>\keys\physdaq-release.jks")) | Set-Clipboard
+```
+
+Without the secrets the workflow builds a debug-signed APK and says so. It can also
+be run by hand from the Actions tab; the APK is then a download on that run's page.
+
 ### Data tooling
 
 ```bash
@@ -324,13 +426,15 @@ shipping three platforms from one machine is impossible, so
 same `build:*` scripts on a Windows, a macOS and a Linux runner in parallel, and
 each one freezes its own sidecar.
 
-To cut a release:
+To cut a release (the Android APK is built alongside, by `android-apk.yml`):
 
 ```bash
 # 1. bump the version in all three places that have to agree:
 #      app/package.json      — the release job refuses a tag that disagrees
 #      firmware/src/version.h, firmware-hub/src/version.h — the ID line and
 #      the session-file header, which is how a recording names its build
+#    and the Android app's android/app/build.gradle.kts: versionName "1.2.0",
+#      and versionCode +1 (Android refuses an update whose versionCode is not higher)
 git commit -am "chore: release v1.2.0"
 git tag v1.2.0
 git push && git push --tags

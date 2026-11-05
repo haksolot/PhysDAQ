@@ -42,7 +42,8 @@ Step by step, including where to place a sensor on the body and how to read the
 live view: **[User Guide](docs/user-guide.md)**.
 
 **No laptop?** The [Android app](android/README.md) records the same sensors over
-Bluetooth from a phone and writes the same CSV the analysis pipeline reads.
+Bluetooth from a phone and writes the same CSV the analysis pipeline reads. Install
+it from the APK on the [Releases page](https://github.com/haksolot/PhysDAQ/releases).
 
 ---
 

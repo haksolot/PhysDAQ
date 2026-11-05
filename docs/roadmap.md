@@ -37,8 +37,9 @@ well with fixing the schema mismatch above.
 the Python reference, file naming, CSV analysis, tilt and more. Everything else has
 none: no firmware tests, no Python tests, no renderer tests. CI exists — it builds
 both firmware images and all three installers, and cuts a draft release — but it
-does not run the Android tests either. Adding `./gradlew test` to CI is the cheapest
-next step. Highest-value targets after that, in order:
+runs the Android tests only when it builds the APK for a release tag
+(`android-apk.yml`). Running `./gradlew test` on every push is the cheapest next
+step. Highest-value targets after that, in order:
 
 1. `bridge.py` line parsing and DSP against recorded fixtures — pure functions,
    easy to pin, and the layer most likely to break silently.

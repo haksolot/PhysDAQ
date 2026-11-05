@@ -41,6 +41,7 @@ make sidecar                           # freeze bridge.py for packaging
 cd app && npm run dev / typecheck / build:win
 cd android && ./gradlew test           # Android JVM unit tests (Windows: .\gradlew test)
 cd android && ./gradlew assembleDebug  # Android debug APK
+cd android && ./gradlew assembleRelease # signed release APK (needs keystore.properties or CI secrets)
 ```
 
 `make help` lists everything. A Zephyr toolchain must be active for firmware
@@ -96,6 +97,9 @@ targets — see [docs/development.md](docs/development.md).
 - **Android file names are `<stamp>_<session>_<position>.csv`** and position
   slugs use hyphens only (`wrist-left`), so the position is always what follows
   the last underscore. `RecordingFileNames.parse` and the Library depend on it.
+- **Android release key:** never commit `keystore.properties` or any `.jks`/`.keystore`.
+  Every release bumps `versionCode` in `android/app/build.gradle.kts`, or phones
+  refuse the update.
 - **A hub feeds two body-position slots from one bridge process.** `channelSlots`
   in `sidecar.ts` maps PPG channel → slot, and `activeRecordings` is keyed on the
   slot, not the device. That is what keeps the 17-column session CSV unchanged.
@@ -134,4 +138,5 @@ targets — see [docs/development.md](docs/development.md).
   are marked `binary`.
 - Do not commit `build/`, `build-hub/`, `.west/`, `zephyr/`, `modules/`,
   `.venv/`, `app/node_modules/`, `app/out/`, `app/sidecar/`, `android/build/`,
-  `android/app/build/`, `android/.gradle/`, `android/.idea/`, `android/local.properties`.
+  `android/app/build/`, `android/.gradle/`, `android/.idea/`, `android/local.properties`,
+  `android/keystore.properties`, `*.jks`, `*.keystore`.

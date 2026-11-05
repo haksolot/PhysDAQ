@@ -17,7 +17,25 @@ How to record a session: **[User Guide](../docs/user-guide.md#recording-with-the
 
 ---
 
-## Build and install
+## Install from an APK (no Android Studio)
+
+1. On the phone, open the project's
+   [Releases page](https://github.com/haksolot/PhysDAQ/releases) and download
+   **`PhysDAQ-Android-<version>.apk`**.
+2. Open the downloaded file. Android asks to allow installing apps from your
+   browser or Files app: allow it for that app.
+3. If Play Protect warns about an unknown developer, choose **Install anyway**.
+   The APK is signed by the project, not published on the Play Store.
+4. On first use, allow **Nearby devices** and **notifications**.
+
+Installing a newer APK over an older one keeps your recordings and body-position
+assignments. A copy installed from Android Studio is signed differently, so
+uninstall it first; recordings stay in `Download/PhysDAQ/` but the Library then lists
+only new ones (open older ones with **Open CSV file**).
+
+---
+
+## Build and install from source
 
 1. Install [Android Studio](https://developer.android.com/studio) and open this
    `android/` folder (not the repo root).
@@ -32,7 +50,8 @@ Requires Android 10 (API 29) or newer. Tested on a Samsung Galaxy S22.
 From a terminal:
 
 ```bash
-./gradlew assembleDebug    # build the APK   (Windows PowerShell: .\gradlew assembleDebug)
+./gradlew assembleDebug    # debug APK, for your own phone   (Windows PowerShell: .\gradlew assembleDebug)
+./gradlew assembleRelease  # signed release APK, once the release key is set up
 ./gradlew test             # run the unit tests, no phone needed
 ```
 
@@ -41,6 +60,9 @@ If the editor shows hundreds of red "Unresolved reference" errors but
 Gradle Files*, then *File → Invalidate Caches → Invalidate and Restart*. Keeping the
 project inside OneDrive makes this more likely; see
 [development.md](../docs/development.md#android-app).
+
+Making a release APK (signing key, CI): see
+[development.md](../docs/development.md#android-release-apk).
 
 ---
 
