@@ -348,7 +348,7 @@ make explore FILE=logs/<file>.csv     # interactive viewer
 
 The Android app records the same devices over Bluetooth, without a laptop, and
 writes the format the offline pipeline reads. Install it from the APK on the
-project's [Releases page](https://github.com/haksolot/PhysDAQ/releases) (steps in
+repository's [Releases page](../../../releases) (steps in
 [android/README.md](../android/README.md#install-from-an-apk-no-android-studio));
 it needs Android 10 or newer.
 

@@ -43,7 +43,7 @@ live view: **[User Guide](docs/user-guide.md)**.
 
 **No laptop?** The [Android app](android/README.md) records the same sensors over
 Bluetooth from a phone and writes the same CSV the analysis pipeline reads. Install
-it from the APK on the [Releases page](https://github.com/haksolot/PhysDAQ/releases).
+it from the APK on this repository's [Releases page](../../releases).
 
 ---
 
@@ -83,6 +83,12 @@ A phone app for recording away from a desk. It links each sensor to a body
 position, shows live heart rate, tilt and signals, records over Bluetooth, and
 keeps a library of sessions with per-sensor statistics and a side-by-side heart-rate
 comparison. See [android/README.md](android/README.md).
+
+<p align="center">
+  <img src="assets/images/software/android-live.png" width="220" alt="PhysDAQ Android app, Live tab with the body map"/>
+  &nbsp;&nbsp;
+  <img src="assets/images/software/android-detail.png" width="220" alt="PhysDAQ Android app, a linked sensor's detail view"/>
+</p>
 
 </td>
 </tr>

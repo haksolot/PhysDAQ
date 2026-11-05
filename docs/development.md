@@ -330,6 +330,28 @@ release as `PhysDAQ-Android-<tag>.apk`. Give it the key as four repository secre
 Without the secrets the workflow builds a debug-signed APK and says so. It can also
 be run by hand from the Actions tab; the APK is then a download on that run's page.
 
+#### Releasing only the Android app (or from a fork)
+
+A full `v*` tag also runs `release.yml` (firmware and desktop installers) and needs
+the version agreed in every place listed under [Releasing](#releasing). When only
+the phone app changed, or you work in a fork, use an **`android-v*`** tag instead:
+only the APK is built, and the workflow creates the release itself, as a draft.
+
+```bash
+# bump versionName and versionCode in android/app/build.gradle.kts first
+git commit -am "android: release 1.0.0"
+git tag android-v1.0.0
+git push && git push --tags
+```
+
+Then open the repository's **Releases** page, check the draft
+`PhysDAQ Android 1.0.0` has the APK attached, and **Publish** it.
+
+In a **fork**: Actions are off until enabled (*Actions* tab → enable workflows), and
+the four signing secrets go in the fork's own settings. The release appears on the
+fork's Releases page; the docs' download links are relative, so they point at
+whichever repository is hosting them.
+
 ### Data tooling
 
 ```bash

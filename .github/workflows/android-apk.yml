@@ -1,8 +1,11 @@
 # Builds the Android app's installable APK.
 #
-#  - On every push of a version tag (v1.2.0, ...): runs the unit tests, builds a
+#  - On a full project version tag (v1.2.0, ...): runs the unit tests, builds a
 #    signed release APK and attaches it to that tag's GitHub release as
 #    PhysDAQ-Android-<tag>.apk (release.yml creates the release; this waits for it).
+#  - On an Android-only tag (android-v1.0.0, ...): same build, and this workflow
+#    creates the release itself as a draft. Use these in a fork, or whenever only
+#    the phone app changed. release.yml does not run for them.
 #  - From the Actions tab ("Run workflow"): same build, APK kept as a run artifact.
 #
 # Signing (one-time setup, see docs/development.md#android-release-apk): repo
@@ -14,7 +17,7 @@ name: android-apk
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "android-v*"]
   workflow_dispatch:
 
 permissions:
@@ -88,6 +91,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [[ "$GITHUB_REF_NAME" == android-v* ]]; then
+            gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+              gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+                --title "PhysDAQ Android ${GITHUB_REF_NAME#android-v}" \
+                --notes "Android app only. Install: download the APK on the phone and open it."
+            gh release upload "$GITHUB_REF_NAME" "${{ steps.name.outputs.file }}" --clobber
+            exit 0
+          fi
           for i in $(seq 1 60); do
             id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
                   -q ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n 1)

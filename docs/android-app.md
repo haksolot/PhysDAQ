@@ -19,6 +19,13 @@ the phone uses Bluetooth only.
 
 ## Screens
 
+<p align="center">
+  <img src="../assets/images/software/android-live.png" width="240" alt="Live tab: session name, Record, and the body map with no sensors linked"/>
+  &nbsp;&nbsp;
+  <img src="../assets/images/software/android-detail.png" width="240" alt="Detail view: Left Wrist, live at 60 BPM, battery 46%, tilt indicator, filtered PPG and raw IR charts, stream statistics"/>
+</p>
+<p align="center"><sub>Left: Live tab before linking. Right: Detail of a sensor on the left wrist: heart rate, battery, tilt, filtered PPG, raw IR and stream statistics.</sub></p>
+
 The app has two tabs under the logo.
 
 | Tab | What it shows |

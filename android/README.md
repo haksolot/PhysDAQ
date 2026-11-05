@@ -10,6 +10,13 @@ press Record, and get one CSV per device that `analysis/pipeline.py` reads as is
   a side-by-side heart-rate comparison
 - Opens desktop-app CSVs too
 
+<p align="center">
+  <img src="../assets/images/software/android-live.png" width="240" alt="Live tab: session recording and the body map"/>
+  &nbsp;&nbsp;
+  <img src="../assets/images/software/android-detail.png" width="240" alt="Detail view of a linked sensor: heart rate, battery, tilt and live signals"/>
+</p>
+<p align="center"><sub>Left: the Live tab with nothing linked yet. Right: a sensor on the left wrist, worn, at 60 BPM.</sub></p>
+
 How it works, file formats and limits: **[docs/android-app.md](../docs/android-app.md)**.
 How to record a session: **[User Guide](../docs/user-guide.md#recording-with-the-phone-app)**.
 
@@ -19,8 +26,8 @@ How to record a session: **[User Guide](../docs/user-guide.md#recording-with-the
 
 ## Install from an APK (no Android Studio)
 
-1. On the phone, open the project's
-   [Releases page](https://github.com/haksolot/PhysDAQ/releases) and download
+1. On the phone, open this repository's
+   [Releases page](../../../releases) and download
    **`PhysDAQ-Android-<version>.apk`**.
 2. Open the downloaded file. Android asks to allow installing apps from your
    browser or Files app: allow it for that app.
