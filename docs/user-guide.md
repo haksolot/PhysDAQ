@@ -1,7 +1,8 @@
 # User Guide
 
 How to prepare a PhysDAQ node, connect it to the desktop app, record a session,
-and review the data afterwards.
+and review the data afterwards. To record from a phone instead, see
+[Recording with the phone app](#recording-with-the-phone-app).
 
 This guide assumes the hardware is already assembled. For wiring, see
 [hardware.md](hardware.md); for building from source, see
@@ -338,8 +339,66 @@ make explore FILE=logs/<file>.csv     # interactive viewer
 ```
 
 > ⚠️ The offline pipeline currently reads the **logger's** CSV format, not the
-> app's. Use `make log` for recordings you intend to process offline. Details and
-> workaround status in [analysis.md](analysis.md).
+> desktop app's. Use `make log` or the phone app for recordings you intend to
+> process offline. Details and workaround status in [analysis.md](analysis.md).
+
+---
+
+## Recording with the phone app
+
+The Android app records the same devices over Bluetooth, without a laptop, and
+writes the format the offline pipeline reads. Install it from the APK on the
+repository's [Releases page](../../../releases) (steps in
+[android/README.md](../android/README.md#install-from-an-apk-no-android-studio));
+it needs Android 10 or newer.
+
+**First time:** allow **Nearby devices** and **notifications** when asked. The
+notification is what keeps recording alive with the screen off.
+
+### Link the devices
+
+1. On the **Live** tab, find the body position the device will be worn at, for
+   example **Left Wrist**, and press **Link**. You can also tap that position's dot
+   on the body map.
+2. The scan list opens. Wake the device if it is asleep (move it), then tap it. A
+   device you have used before shows where it was last worn.
+3. The dot and the row turn **green** once the sensor is on skin, **amber** while it
+   is connected but not worn, **mauve** while connecting.
+
+The phone remembers each device's position, and a position holds one device.
+**Detail** on a row shows heart rate, battery, a tilt indicator and the live
+signals; **Kill** disconnects that device.
+
+Heart rate needs about 8 s of steady contact before the first reading.
+
+### Record
+
+1. Type a **session name** (default `PhysDAQ_Session`).
+2. Press **Record**. If a linked device is not worn or not connected, the app lists
+   it and asks before recording. Disconnected devices are not recorded.
+3. Press **Stop** when done.
+
+Each device gets its own file in **Download/PhysDAQ/** on the phone, named
+`<date>_<time>_<session name>_<position>.csv`, all sharing one start time. Copy them
+to a computer over USB (File transfer mode) and run `make process FILE=...` on any
+of them.
+
+### Review in the Library
+
+The **Library** tab lists every session recorded on this phone, newest first.
+Open one to see, for each device, its length, sample rate, gaps, time worn, heart
+rate over time, tilt over time and a scrollable PPG trace. Sessions with two or
+more devices also get a **Compare nodes** chart of every device's heart rate.
+
+**Open CSV file** reads a file from anywhere on the phone, including desktop-app
+recordings and files from before the app was reinstalled (Android hides those from
+the list). **Delete** removes a session's files after asking.
+
+### If a device drops
+
+An amber line *"Device may have gone to sleep: move it or touch the sensor to wake
+it"* means the link went silent (Bluetooth status 8). Usually the node fell asleep
+after 10 s without movement or skin contact; move it and it reconnects by itself.
 
 ---
 
@@ -383,3 +442,7 @@ make rebuild && make flash
 | Orientation drifts in yaw | No magnetometer on this board | Expected; roll and pitch stay accurate |
 | Serial port vanished mid-session | Node went to sleep | Wake it and reconnect |
 | App says "Python sidecar not found" | Development build without the frozen bridge | See [development.md](development.md#packaging-the-desktop-app) |
+| Phone: amber "may have gone to sleep" line | The node slept (no motion, no contact) | Move it or touch the sensor; it reconnects on its own |
+| Phone: one device keeps dropping, others are fine | Old firmware, weak battery, or a radio fault on that board | Reflash `physdaq.uf2`, charge it, compare its signal strength (dBm) with a working device |
+| Phone: older recordings missing from the Library | The app was reinstalled; Android hides files it did not create | Use **Open CSV file**, or copy them off over USB |
+| Phone: nothing in the scan list | Bluetooth or Nearby devices permission off, or the node asleep | Allow the permission in the app's system settings; move the node |

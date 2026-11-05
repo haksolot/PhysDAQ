@@ -21,3 +21,8 @@ __pycache__/
 
 # Sensor logs (raw + processed CSV — can be large)
 logs/*.csv
+
+android/keystore.properties
+*.jks
+*.keystore
+ 

@@ -30,6 +30,8 @@ flowchart TB
   BR["<b>BRIDGE</b> · scripts/bridge.py<br/>parse · per-channel DSP · AHRS fusion +ZUPT · FFT heart rate"]
   APP["<b>DESKTOP APP</b> · app/ — Electron · React · Vite<br/>body map · live charts · 3D orientation · recording<br/>hub: SD browse / erase / download · satellite roster"]
   CSV[("CSV — one per body position, per session")]
+  PHONE["<b>ANDROID APP</b> · android/ — Kotlin · Compose<br/>BLE NUS direct, no bridge · heart rate · tilt<br/>body map · recording · session library"]
+  LCSV[("Logger-schema CSV<br/>Download/PhysDAQ on the phone")]
   AN["<b>OFFLINE ANALYSIS</b> · analysis/<br/>motion cancellation · beat detection · HRV (RMSSD) · SpO2 · explorer"]
 
   LOOP -- "USB CDC ACM · 100 Hz<br/>or BLE (NUS) · ~25 Hz<br/>ASCII: <code>PPG red=… ir=… | IMU ax=…</code>" --> BR
@@ -38,6 +40,9 @@ flowchart TB
   APP -- "commands on stdin" --> BR
   APP --> CSV
   CSV --> AN
+  LOOP -- "BLE (NUS) · ~25 Hz<br/>same ASCII lines" --> PHONE
+  PHONE --> LCSV
+  LCSV --> AN
 ```
 
 > **No mesh.** Nodes do not talk to each other, and neither does the hub — it
@@ -603,3 +608,26 @@ not `ppg_red`/`ppg_ir`.
 > raise on an app-recorded session's ISO timestamp, and the `red`/`ir` columns it
 > wants do not exist there. There is currently no converter in the repo. See
 > [roadmap.md](roadmap.md).
+
+### Phone recordings (Android app)
+
+The Android app writes **this logger schema**, unchanged, so its files go straight
+into `analysis/pipeline.py`. Details in [android-app.md](android-app.md#recording).
+
+**Location:** `Download/PhysDAQ/` on the phone, one file per device:
+
+```
+<YYYY-MM-DD_HH-MM-SS>_<session name>_<position>.csv
+2026-10-22_12-17-44_PhysDAQ_Session_finger-left.csv
+```
+
+- `timestamp` is float seconds since Record was pressed, 4 decimals, from the
+  phone's arrival time of each sample. **Every file in a session shares that
+  zero.**
+- The session name keeps `[A-Za-z0-9_-]`; everything else becomes `_`.
+- `<position>` is the body position slug, **hyphens only**: `head`, `chest`,
+  `wrist-left`, `wrist-right`, `finger-left`, `finger-right`, `ankle-left`,
+  `ankle-right`. The position is always what follows the last underscore. (The
+  desktop app's folders use `wrist_left` with an underscore; the phone does not.)
+- Over BLE the rate is **~24.3 Hz**, not 100 Hz. Read the rate from the
+  timestamps, never assume it.

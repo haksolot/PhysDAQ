@@ -21,6 +21,10 @@ app/                Electron desktop application
   src/renderer/     React UI
   resources/        firmware UF2s bundled into the installer
   scripts/          build-sidecar.mjs (npm → Python shim)
+android/            native Android app (Kotlin, Jetpack Compose) — BLE, recording, library
+  app/src/main/     the app: ble/, dsp/, storage/, nodes/, library/, ui/
+  app/src/test/     JVM unit tests (+ a real recording excerpt in resources/)
+  tools/            Python helpers: node_watch, check_recording, sync_check, ...
 scripts/            bridge.py, build/flash helpers, live plotter, env setup
 analysis/           CSV logger, offline pipeline, interactive explorer
 assets/             logo SVGs, product renders, enclosure CAD (models/*.step)
@@ -44,11 +48,18 @@ flowchart LR
   R1 & R2 --> RES["app/resources/firmware/"]
   RES --> APP
   B3 --> APP
+  AND["android/"] -- "gradlew assembleDebug" --> APK["android/app/build/…/app-debug.apk"]
 ```
 
 Not in git (all generated): `.west/`, `zephyr/`, `modules/`, `bootloader/`,
 `tools/`, `build/`, `build-hub/`, `.venv/`, `app/node_modules/`, `app/out/`,
-`app/dist/`, `app/sidecar/`, `app/resources/firmware/*.uf2`, `logs/*.csv`.
+`app/dist/`, `app/sidecar/`, `app/resources/firmware/*.uf2`, `logs/*.csv`,
+`android/.gradle/`, `android/build/`, `android/app/build/`, `android/.idea/`,
+`android/local.properties`, `android/keystore.properties` and any `*.jks` /
+`*.keystore` (the release key: back it up, never commit it).
+
+> The root `tools/` folder is ignored (it holds the Zephyr toolchain). Python
+> helpers for the Android app live in `android/tools/`, which is tracked.
 
 ---
 
@@ -189,6 +200,158 @@ npm run format
 `npm run dev` uses the repo `.venv` for the bridge, so firmware changes and app
 changes can be iterated together without repackaging anything.
 
+### Android app
+
+Install [Android Studio](https://developer.android.com/studio) and open the
+**`android/`** folder (not the repo root). It brings its own JDK and Gradle; nothing
+from the Zephyr toolchain or the Python venv is needed.
+
+```bash
+cd android
+./gradlew test             # JVM unit tests, no phone needed   (PowerShell: .\gradlew test)
+./gradlew assembleDebug    # debug APK
+```
+
+Run on a phone with **Run ▶** (USB debugging on). Android 10 (API 29) or newer.
+Architecture, file formats and rules: [android-app.md](android-app.md).
+
+- **Gradle builds but the editor is full of red.** Hundreds of "Unresolved
+  reference" errors (`ComponentActivity`, `setContent`, ...) while
+  `gradlew assembleDebug` succeeds means the editor's index is stale, not the code:
+  *File → Sync Project with Gradle Files*, then *File → Invalidate Caches →
+  Invalidate and Restart*.
+- **Keep the project out of OneDrive** (or pause syncing while you work). OneDrive
+  locks and half-syncs `.gradle/` and `build/` while Gradle writes to them, which is
+  the usual cause of the problem above. `C:\dev\PhysDAQ` is a good place.
+- **Source files go in `app/src/main/java/com/physdaq/mobile/`, tests in
+  `app/src/test/java/com/physdaq/mobile/`.** A test file accidentally placed under
+  `main/` (or a second copy of a class) shows up as "Redeclaration" errors.
+- The UI (Compose), the BLE client and MediaStore are not unit-tested; check them
+  on a phone.
+
+### Android release APK
+
+An APK is the installable app file. There are two kinds:
+
+| | Debug APK | Release APK |
+|---|---|---|
+| Build | `./gradlew assembleDebug` | `./gradlew assembleRelease` (or CI, below) |
+| Output | `app/build/outputs/apk/debug/app-debug.apk` | `app/build/outputs/apk/release/app-release.apk` |
+| Signed with | the debug key of **that** PC | the project's **release key** |
+| Use | your own phone while developing | anything you hand to someone else |
+
+Android only installs an update over an app signed with the **same key**. Each PC
+has its own debug key, so debug APKs from different machines cannot update each
+other. Release APKs always can, as long as the release key is kept.
+
+#### One-time: create the release key
+
+In Android Studio: *Build → Generate Signed App Bundle or APK → APK → Create new…*.
+Save it **outside the repo** (for example `C:/Users/<you>/keys/physdaq-release.jks`),
+alias `physdaq`, validity 25 years or more. Or from a terminal (`keytool` is in
+Android Studio's `jbr/bin`):
+
+```bash
+keytool -genkeypair -v -keystore physdaq-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias physdaq
+```
+
+> ⚠️ **Back the key file and its passwords up somewhere safe** (not git). If it is
+> lost, no future APK can update installed copies: every phone has to uninstall,
+> which also hides old recordings from the Library.
+
+Then create `android/keystore.properties` (ignored by git):
+
+```properties
+storeFile=C:/Users/<you>/keys/physdaq-release.jks
+storePassword=...
+keyAlias=physdaq
+keyPassword=...
+```
+
+#### One-time: tell Gradle to use it
+
+In `android/app/build.gradle.kts`, add at the very top:
+
+```kotlin
+import java.util.Properties
+
+// Release signing: environment variables (CI) or android/keystore.properties (your PC).
+val signingProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingValue(env: String, prop: String): String? =
+    System.getenv(env) ?: signingProps.getProperty(prop)
+```
+
+and inside the `android { }` block:
+
+```kotlin
+    signingConfigs {
+        signingValue("PHYSDAQ_KEYSTORE", "storeFile")?.let { path ->
+            create("release") {
+                storeFile = file(path)
+                storePassword = signingValue("PHYSDAQ_KEYSTORE_PASSWORD", "storePassword")
+                keyAlias = signingValue("PHYSDAQ_KEY_ALIAS", "keyAlias")
+                keyPassword = signingValue("PHYSDAQ_KEY_PASSWORD", "keyPassword")
+            }
+        }
+    }
+```
+
+and in the existing `buildTypes { release { ... } }` block:
+
+```kotlin
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+```
+
+`./gradlew assembleRelease` now produces a signed `app-release.apk`. With no key
+configured it still builds, but the APK is unsigned and will not install.
+
+#### One-time: let CI sign it
+
+[`.github/workflows/android-apk.yml`](../.github/workflows/android-apk.yml) runs the
+tests and builds the APK on every version tag, and attaches it to that tag's
+release as `PhysDAQ-Android-<tag>.apk`. Give it the key as four repository secrets
+(*Settings → Secrets and variables → Actions*):
+
+| Secret | Value |
+|---|---|
+| `PHYSDAQ_KEYSTORE_BASE64` | the `.jks` file as base64 (below) |
+| `PHYSDAQ_KEYSTORE_PASSWORD` | store password |
+| `PHYSDAQ_KEY_ALIAS` | `physdaq` |
+| `PHYSDAQ_KEY_PASSWORD` | key password |
+
+```powershell
+# Windows: copy the key file as base64 to the clipboard, then paste it as the secret
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\Users\<you>\keys\physdaq-release.jks")) | Set-Clipboard
+```
+
+Without the secrets the workflow builds a debug-signed APK and says so. It can also
+be run by hand from the Actions tab; the APK is then a download on that run's page.
+
+#### Releasing only the Android app (or from a fork)
+
+A full `v*` tag also runs `release.yml` (firmware and desktop installers) and needs
+the version agreed in every place listed under [Releasing](#releasing). When only
+the phone app changed, or you work in a fork, use an **`android-v*`** tag instead:
+only the APK is built, and the workflow creates the release itself, as a draft.
+
+```bash
+# bump versionName and versionCode in android/app/build.gradle.kts first
+git commit -am "android: release 1.0.0"
+git tag android-v1.0.0
+git push && git push --tags
+```
+
+Then open the repository's **Releases** page, check the draft
+`PhysDAQ Android 1.0.0` has the APK attached, and **Publish** it.
+
+In a **fork**: Actions are off until enabled (*Actions* tab → enable workflows), and
+the four signing secrets go in the fork's own settings. The release appears on the
+fork's Releases page; the docs' download links are relative, so they point at
+whichever repository is hosting them.
+
 ### Data tooling
 
 ```bash
@@ -285,13 +448,15 @@ shipping three platforms from one machine is impossible, so
 same `build:*` scripts on a Windows, a macOS and a Linux runner in parallel, and
 each one freezes its own sidecar.
 
-To cut a release:
+To cut a release (the Android APK is built alongside, by `android-apk.yml`):
 
 ```bash
 # 1. bump the version in all three places that have to agree:
 #      app/package.json      — the release job refuses a tag that disagrees
 #      firmware/src/version.h, firmware-hub/src/version.h — the ID line and
 #      the session-file header, which is how a recording names its build
+#    and the Android app's android/app/build.gradle.kts: versionName "1.2.0",
+#      and versionCode +1 (Android refuses an update whose versionCode is not higher)
 git commit -am "chore: release v1.2.0"
 git tag v1.2.0
 git push && git push --tags
@@ -374,7 +539,8 @@ inside a Linux package.
 - **Firmware comments** explain *why*, not *what* — several non-obvious choices
   (FIFO rollover, watchdog sleep options, the reverted heartbeat-validated
   contact check) are documented in-source and should stay that way.
-- **No test suite exists** in any layer. See [roadmap.md](roadmap.md).
+- **Only the Android app has tests** (`cd android && ./gradlew test`). Firmware,
+  bridge, desktop app and analysis have none. See [roadmap.md](roadmap.md).
 
 ---
 
@@ -394,3 +560,6 @@ inside a Linux package.
 | Sidecar exits with `ModuleNotFoundError` | PyInstaller missed a dynamic import | Add it to `hiddenimports` in `scripts/bridge.spec`, rebuild with `make sidecar CLEAN=1` |
 | Antivirus / SmartScreen flags the installer | Unsigned PyInstaller binary | Expected; code-sign via `win.certificateFile` if distributing widely |
 | Serial port vanished | Node entered deep sleep | Move it to wake it, then reconnect — the USB CDC port is recreated |
+| Android: hundreds of red errors, but `gradlew assembleDebug` succeeds | Stale editor index | Sync Project with Gradle Files; Invalidate Caches and Restart |
+| Android: "Redeclaration" errors | A class exists twice, often a file copied into `main/` instead of `test/` | Delete the stray copy |
+| `make` not recognised (Windows PowerShell) | No make on that machine | Use the desktop app's **Flash node firmware**, or drag `physdaq.uf2` onto the XIAO-SENSE drive |

@@ -60,7 +60,10 @@ except ImportError:
     sys.exit(1)
 
 # ── DSP parameters ────────────────────────────────────────────────────────────
-FS             = 100.0  # Hz — MAX30102 sample rate
+FS             = 100.0  # Hz — default sample rate, used only if the file has no usable
+                        # timestamps. main() replaces it with the rate measured from
+                        # the file's own timestamps (the Android app streams ~24 Hz
+                        # over BLE; the desktop/serial logger wrote 100 Hz).
 PPG_LOW_HZ     = 0.5   # bandpass lower edge (30 BPM)
 PPG_HIGH_HZ    = 8.0   # bandpass upper edge — 8 Hz preserves up to 6th harmonic
                         # at 80 BPM (1.33 Hz × 6 = 8 Hz), giving proper pulse shape
@@ -118,25 +121,30 @@ RMSSD_WINDOW = 5
 
 
 # ── Filter helpers ─────────────────────────────────────────────────────────────
-def bandpass(sig, low, high, fs=FS, order=FILTER_ORDER):
+def bandpass(sig, low, high, fs=None, order=FILTER_ORDER):
+    fs = FS if fs is None else fs
     sos = butter(order, [low, high], btype="band", fs=fs, output="sos")
     return sosfiltfilt(sos, sig)
 
 
-def lowpass(sig, cutoff, fs=FS, order=FILTER_ORDER):
+def lowpass(sig, cutoff, fs=None, order=FILTER_ORDER):
+    fs = FS if fs is None else fs
     sos = butter(order, cutoff, btype="low", fs=fs, output="sos")
     return sosfiltfilt(sos, sig)
 
 
-def motion_cancel(ppg_filt, accel_xyz_filt, order=8):
+def motion_cancel(ppg_filt, accel_xyz_filt, order=None):
     """Wiener-optimal motion artifact removal via least-squares regression.
 
     Models the motion artifact as a linear combination of `order` delayed
     samples of each accel axis and subtracts the optimal estimate from ppg.
     Both inputs must already be bandpass-filtered to the PPG band.
 
-    order=8 @ 100 Hz covers 80 ms of motion lag — sufficient for wrist motion.
+    The lag covered is 80 ms (8 taps at 100 Hz); the tap count scales with FS so
+    the same 80 ms is covered at other sample rates (2 taps at ~24 Hz).
     """
+    if order is None:
+        order = max(1, int(round(0.08 * FS)))
     N    = len(ppg_filt)
     cols = []
     for ch in range(3):
@@ -163,7 +171,7 @@ def _parabolic_peak(spec, k):
     return k + float(np.clip(offset, -0.5, 0.5))
 
 
-def spectral_bpm(signal, accel_mag, contact, fs=FS, window_s=8.0, step_s=2.0):
+def spectral_bpm(signal, accel_mag, contact, fs=None, window_s=8.0, step_s=2.0):
     """Sliding-window FFT heart rate estimator (motion-robust).
 
     Suppresses FFT bins where the accelerometer spectrum dominates so the
@@ -175,6 +183,7 @@ def spectral_bpm(signal, accel_mag, contact, fs=FS, window_s=8.0, step_s=2.0):
 
     Returns (times_s, bpms) arrays aligned to window centres.
     """
+    fs   = FS if fs is None else fs
     win  = int(window_s * fs)
     step = int(step_s  * fs)
     N    = len(signal)
@@ -256,15 +265,16 @@ def run_madgwick(df):
     return quats, eulers
 
 
-def rolling_rms(sig, window_s, fs=FS):
+def rolling_rms(sig, window_s, fs=None):
     """Centered rolling RMS, used as a local amplitude reference for
     adaptive peak detection (handles drifting signal amplitude)."""
+    fs  = FS if fs is None else fs
     win = max(int(window_s * fs), 1)
     s   = pd.Series(sig ** 2)
     return np.sqrt(s.rolling(win, center=True, min_periods=1).mean().to_numpy())
 
 
-def compute_contact(ir_raw, fs=FS):
+def compute_contact(ir_raw, fs=None):
     """Skin-contact mask from the raw IR DC level — see CONTACT_IR_MIN."""
     dc = lowpass(ir_raw, CONTACT_DC_HZ, fs=fs)
     return dc > CONTACT_IR_MIN
@@ -338,7 +348,26 @@ def compute_beats(ts, ir_beat, ir_filt, red_filt, ir_dc, red_dc, motion, contact
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+def estimate_fs(ts, fallback=None):
+    """Mean sample rate from the timestamp column: (N-1) / (last - first).
+    Uses the whole file, so jitter in single intervals does not matter; gaps
+    (dropouts) do lower it slightly. Falls back to FS if the timestamps are
+    unusable (fewer than 2 rows, not increasing)."""
+    fallback = FS if fallback is None else fallback
+    if len(ts) < 2:
+        return fallback
+    span = float(ts[-1] - ts[0])
+    if not np.isfinite(span) or span <= 0:
+        return fallback
+    fs = (len(ts) - 1) / span
+    if not (5.0 <= fs <= 1000.0):
+        print(f"WARNING: timestamps imply {fs:.2f} Hz, which looks wrong; using {fallback} Hz")
+        return fallback
+    return fs
+
+
 def main():
+    global FS
     if len(sys.argv) < 2:
         print(f"Usage: python {sys.argv[0]} <logfile.csv>")
         print("       make process FILE=logs/2026-06-15_14-32.csv")
@@ -352,7 +381,8 @@ def main():
     print(f"Loading {in_path} ...")
     df = pd.read_csv(in_path).astype(float)
     N  = len(df)
-    print(f"  {N} samples  (~{N / FS:.1f} s)")
+    FS = estimate_fs(df["timestamp"].to_numpy())
+    print(f"  {N} samples  (~{N / FS:.1f} s)  sample rate {FS:.2f} Hz (from timestamps)")
 
     if N < int(FS * 5):
         print("WARNING: less than 5 s of data — beat detection may be unreliable")

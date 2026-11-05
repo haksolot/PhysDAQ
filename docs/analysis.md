@@ -98,6 +98,24 @@ flowchart LR
   SB --> S[("_bpm_spectral.csv<br/>per 2 s window")]
 ```
 
+### Sample rate comes from the timestamps
+
+The pipeline does **not** assume 100 Hz. `estimate_fs()` measures the mean rate of
+each file as (N − 1) / (last − first timestamp) and every rate-dependent setting
+uses it: the filters, the beat-detection band, window lengths and the motion
+canceller's taps (`round(0.08 × FS)`). `FS = 100.0` is only the fallback for a file
+whose timestamps are unusable, and a rate outside 5–1000 Hz prints a warning.
+
+This matters because recordings over Bluetooth, including every file from the
+Android app, arrive at **about 24.3 Hz**. Treated as 100 Hz, a 68 BPM recording came
+out at about 35 BPM; measured, it gives 73 BPM against a counted pulse of 68. The
+start-up line prints the rate it found: check it.
+
+> ⚠️ **HRV from Bluetooth recordings is not reliable.** Each sample's timestamp is
+> when it reached the host, quantised by the BLE connection interval (gaps cluster
+> near 30 and 60 ms, jitter about 12 ms). Heart rate averages that out; beat-to-beat
+> intervals and RMSSD do not. Use a USB recording (100 Hz, `make log`) for HRV.
+
 ### Why the parameters are what they are
 
 The code comments carry most of this; the non-obvious choices:
@@ -150,13 +168,15 @@ Requires `pyqtgraph`, `PyQt6` and `PyOpenGL` (all in `requirements.txt`).
 The bridge that feeds the desktop app does **not** run this pipeline. It computes
 a lighter real-time subset:
 
-| | Bridge (live) | Pipeline (offline) |
-|---|---|---|
-| Orientation | imufusion AHRS + ZUPT | Madgwick |
-| Heart rate | 8 s FFT window, parabolic sub-bin interpolation, rate-limited smoothing | Peak detection + sliding spectral estimate |
-| PPG filter | single-sample EMA band-pass | 4th-order Butterworth, zero-phase |
-| Motion cancellation | none | order-8 Wiener regression |
-| SpO2 / HRV | not computed | computed |
+| | Bridge (live) | Android app (live and Library) | Pipeline (offline) |
+|---|---|---|---|
+| Orientation | imufusion AHRS + ZUPT | Madgwick 6-axis, no ZUPT; roll and pitch only in the Library | Madgwick |
+| Heart rate | 8 s FFT window, parabolic sub-bin interpolation, rate-limited smoothing | same method as the bridge, with the sample rate measured from timestamps | Peak detection + sliding spectral estimate |
+| PPG filter | single-sample EMA band-pass | band-pass for display only | 4th-order Butterworth, zero-phase |
+| Motion cancellation | none | none | order-8 Wiener regression |
+| SpO2 / HRV | not computed | not computed | computed |
+
+The Android app is described in [android-app.md](android-app.md#signal-processing).
 
 The live path is deliberately cheap and causal; the offline path is zero-phase
 and can look at the whole recording. Expect their BPM estimates to differ
@@ -172,7 +192,7 @@ the problem. Roll and pitch are gravity-referenced and stay accurate.
 
 ---
 
-## ⚠️ Known caveat: the app's CSVs are not pipeline input
+## ⚠️ Known caveat: the desktop app's CSVs are not pipeline input
 
 `pipeline.py` calls `pd.read_csv(path).astype(float)` and expects the **logger**
 schema (`timestamp,red,ir,ax…gz`, float timestamp).
@@ -181,9 +201,11 @@ Sessions recorded by the desktop app use a different schema — ISO-8601 string
 timestamps, `ppg_red`/`ppg_ir` instead of `red`/`ir`, plus quaternion and BPM
 columns. Feeding one to `make process` raises on the timestamp conversion.
 
-**There is no converter in the repo yet.** For now, use `make log` when you
-intend to run the offline pipeline, and the app's recorder when you want
-multi-node sessions. See [roadmap.md](roadmap.md).
+**There is no converter in the repo yet.** For now, use `make log` or the
+**Android app** when you intend to run the offline pipeline. The Android app writes
+the logger schema, one file per device, so it is also the way to get multi-node
+sessions the pipeline can read (over Bluetooth, so mind the HRV warning above). See
+[roadmap.md](roadmap.md).
 
 There is now a **third** format this pipeline cannot read: the hub's on-card
 `.BIN` files (512-byte header, 16-byte records, documented in

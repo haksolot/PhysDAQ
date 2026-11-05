@@ -41,6 +41,10 @@
 Step by step, including where to place a sensor on the body and how to read the
 live view: **[User Guide](docs/user-guide.md)**.
 
+**No laptop?** The [Android app](android/README.md) records the same sensors over
+Bluetooth from a phone and writes the same CSV the analysis pipeline reads. Install
+it from the APK on this repository's [Releases page](../../releases).
+
 ---
 
 ## Overview
@@ -70,6 +74,24 @@ A cross-platform acquisition interface that discovers sensors over USB or BLE, d
 
 </td>
 </tr>
+<tr>
+<td colspan="2" valign="top">
+
+### Android App
+
+A phone app for recording away from a desk. It links each sensor to a body
+position, shows live heart rate, tilt and signals, records over Bluetooth, and
+keeps a library of sessions with per-sensor statistics and a side-by-side heart-rate
+comparison. See [android/README.md](android/README.md).
+
+<p align="center">
+  <img src="assets/images/software/android-live.png" width="220" alt="PhysDAQ Android app, Live tab with the body map"/>
+  &nbsp;&nbsp;
+  <img src="assets/images/software/android-detail.png" width="220" alt="PhysDAQ Android app, a linked sensor's detail view"/>
+</p>
+
+</td>
+</tr>
 </table>
 
 ---
@@ -78,11 +100,11 @@ A cross-platform acquisition interface that discovers sensors over USB or BLE, d
 
 - **Pulse and motion together**, 100 times per second: the raw red and infrared
   light signals a pulse oximeter measures, plus 6-axis movement (acceleration
-  and rotation).
+  and rotation). Over Bluetooth the stream is about 25 per second.
 - **Several sensors at once**, each pinned to a spot on an on-screen body map,
   all sharing one session clock.
-- **Live plots and a 3D orientation view** while you record, so you can see a bad
-  placement immediately instead of after the session.
+- **Live plots and a 3D orientation view** while you record (a tilt view on the
+  phone), so you can see a bad placement immediately instead of after the session.
 - **Plain CSV files** — one per sensor, openable in Excel, R, MATLAB or pandas.
   Columns are documented, nothing is proprietary.
 - **An offline analysis pipeline** for heart rate, heart-rate variability (RMSSD),
@@ -123,6 +145,8 @@ Enclosure CAD (STEP) and printing instructions: **[Enclosure](hardware/enclosure
 | Set up a development machine         | [Development Guide](docs/development.md)  |
 | Modify the firmware                  | [Firmware Reference](docs/firmware.md)    |
 | Modify the desktop app               | [Desktop App](docs/desktop-app.md)        |
+| Record from a phone, or modify the Android app | [Android App](docs/android-app.md) |
+| Look up a term (PPG, IR counts, status 8...) | [Glossary](docs/glossary.md)       |
 | See what is planned                  | [Roadmap](docs/roadmap.md)                |
 
 ---
@@ -130,7 +154,7 @@ Enclosure CAD (STEP) and printing instructions: **[Enclosure](hardware/enclosure
 ## Status
 
 Active research development at **BCIT** (Vancouver, BC). The firmware, the
-acquisition bridge and the desktop app work end to end; see the
+acquisition bridge, the desktop app and the Android app work end to end; see the
 [Roadmap](docs/roadmap.md) for what is deliberately not built yet.
 
 > **Research instrument — not a medical device.** Nothing here is validated for
@@ -144,6 +168,7 @@ acquisition bridge and the desktop app work end to end; see the
 make setup           # one-time: fetch Zephyr v3.6.0 and modules (~2–3 GB)
 make build && make flash
 cd app && npm install && npm run dev
+cd android && ./gradlew test    # Android app: open android/ in Android Studio to run it
 make help            # every other target
 ```
 

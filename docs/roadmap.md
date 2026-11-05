@@ -17,7 +17,9 @@ raises on the timestamp conversion.
 
 **Options:** a converter script, or teach `pipeline.py` to sniff the header and
 normalise. The second is better — it removes the trap rather than documenting
-around it. Until then, use `make log` for anything destined for offline analysis.
+around it. Until then, use `make log` or the Android app for anything destined for
+offline analysis: the Android app writes the logger schema, so its recordings are
+not affected. (The Android Library already reads both layouts by column name.)
 
 See [analysis.md](analysis.md) and [protocol.md](protocol.md#4-logger-csv-analysis-input).
 
@@ -29,11 +31,15 @@ For a research tool that is thin — an export step (filtered range, chosen
 channels, maybe EDF or Parquet) is the natural next feature, and it would pair
 well with fixing the schema mismatch above.
 
-### No test suite anywhere
+### Tests exist only in the Android app
 
-No firmware tests, no Python tests, no renderer tests. CI exists — it builds both
-firmware images and all three installers, and cuts a draft release — but it runs
-nothing that could fail on a regression. The system is verified by running it. Highest-value first targets, in order:
+`android/` has JVM unit tests (`./gradlew test`): line parsing, heart rate against
+the Python reference, file naming, CSV analysis, tilt and more. Everything else has
+none: no firmware tests, no Python tests, no renderer tests. CI exists — it builds
+both firmware images and all three installers, and cuts a draft release — but it
+runs the Android tests only when it builds the APK for a release tag
+(`android-apk.yml`). Running `./gradlew test` on every push is the cheapest next
+step. Highest-value targets after that, in order:
 
 1. `bridge.py` line parsing and DSP against recorded fixtures — pure functions,
    easy to pin, and the layer most likely to break silently.
@@ -62,7 +68,35 @@ node stay paired but silent.
 
 Time sync remains unaddressed on either device, and it is what multi-node work
 actually needs: alignment between nodes still rests on the host's arrival
-timestamps, which BLE latency makes imprecise.
+timestamps, which BLE latency makes imprecise. A first two-device recording on the
+Android app (2026-10-22, two fingers) lined the files up within about one sample
+(median 43 ms by pulse-wave cross-correlation); whether that is the devices or the
+body's left/right pulse difference is open. The tap test in
+[android/tools](../android/tools/README.md#sync_checkpy) measures devices only and
+has not been run yet.
+
+---
+
+## Android app
+
+Built: BLE acquisition from several devices, heart rate, tilt, body positions and a
+body map, session recording in the logger schema, a session Library with
+per-node statistics, charts and node comparison, the sleep hint and the
+pre-record check. See [android-app.md](android-app.md).
+
+Not built yet, roughly in order of value:
+
+| Item | Notes |
+|---|---|
+| Two-device timing test | Record the tap test and run `sync_check.py`; decides whether pulse-timing comparisons across positions are possible |
+| Event markers | A Mark button during recording, saved to a separate `_events.csv` so the main CSV schema stays unchanged; shown on the Library charts |
+| Share a session | Zip a session's CSVs and open the Android share sheet |
+| Session notes | Free text per session, saved as a `.txt` next to the CSVs |
+| Low-battery warning | Amber/red battery and a warning in the pre-record check |
+| Copy log | One tap to copy the system log |
+| Signal quality | A Good / Fair / Poor score per node, live and per recording |
+| Hub second sensor | The app reads sensor 0 of a hub only |
+| Settings screen | Contact threshold, keep screen on, default session name |
 
 ---
 
@@ -100,6 +134,10 @@ deliberate. Connection-parameter negotiation is now in place (15–30 ms preferr
 interval, 5 s supervision timeout), which bought link stability rather than
 throughput; **binary packing instead of ASCII is the remaining lever**, worth
 doing if wireless full-rate capture becomes a requirement.
+
+**HRV over BLE is not reliable.** Over BLE every timestamp is the host's arrival
+time, quantised by the connection interval (about 30 ms, jitter about 12 ms). Heart
+rate is fine; beat-to-beat intervals are not. Use USB at 100 Hz for HRV.
 
 **SpO2 is uncalibrated.** The `110 − 25·R` Mendelson model on an uncalibrated
 sensor gives relative trends, not clinical values.

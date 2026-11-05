@@ -8,6 +8,8 @@ file before changing a layer rather than inferring from code alone.
 A wearable research instrument built at BCIT: Zephyr firmware on a XIAO
 nRF52840 Sense + MAX30102 PPG, a Python DSP bridge, an Electron desktop app for
 multi-node live acquisition and recording, and an offline analysis pipeline.
+A native Android app (`android/`) records from the same devices over BLE
+directly, without the bridge or Electron.
 
 Nodes are **independent BLE peripherals / USB CDC devices**. There is no mesh —
 all multi-node aggregation is host-side, one bridge process per device. Do not
@@ -24,6 +26,8 @@ implemented** — say so whenever the roster comes up.
 | `firmware-hub/` | Zephyr 3.6 app (C) — dual-PPG + microSD hub, host command channel | [docs/firmware-hub.md](docs/firmware-hub.md) |
 | `scripts/bridge.py` | serial/BLE → JSON sidecar | [docs/protocol.md](docs/protocol.md) |
 | `app/` | Electron + React desktop app | [docs/desktop-app.md](docs/desktop-app.md) |
+| `android/` | Kotlin + Compose Android app — BLE, on-phone heart rate and tilt, CSV recording, session library | [docs/android-app.md](docs/android-app.md), [android/README.md](android/README.md) |
+| `android/tools/` | Python helpers for the Android app (serial watcher, recording QA, two-device timing) | [android/tools/README.md](android/tools/README.md) |
 | `analysis/` | offline pipeline, logger, explorer | [docs/analysis.md](docs/analysis.md) |
 | `hardware/enclosure/` | 3D-printable case | [its README](hardware/enclosure/README.md) |
 
@@ -35,6 +39,9 @@ make hub / hub-rebuild / hub-flash     # firmware-hub (builds into build-hub/)
 make log / process FILE=… / explore FILE=…
 make sidecar                           # freeze bridge.py for packaging
 cd app && npm run dev / typecheck / build:win
+cd android && ./gradlew test           # Android JVM unit tests (Windows: .\gradlew test)
+cd android && ./gradlew assembleDebug  # Android debug APK
+cd android && ./gradlew assembleRelease # signed release APK (needs keystore.properties or CI secrets)
 ```
 
 `make help` lists everything. A Zephyr toolchain must be active for firmware
@@ -80,6 +87,19 @@ targets — see [docs/development.md](docs/development.md).
 - **On the hub, only the storage thread touches the file system.** Commands post
   a request and block. FATFS is not reentrant across a volume, and the storage
   thread holds the session file open.
+- **Android: all acquisition state lives in `AcquisitionRuntime`**, never the
+  Activity. `AcquisitionService` only keeps the process alive.
+- **Android: no Compose state per sample.** Samples go into `SignalBuffer` ring
+  buffers; charts redraw on their own timer. Same lesson as the renderer.
+- **Android CSVs keep the logger schema** (`timestamp,red,ir,ax,ay,az,gx,gy,gz`,
+  float seconds from one origin per session, `Locale.ROOT` formatting). Derived
+  values (BPM, tilt) are never written as columns.
+- **Android file names are `<stamp>_<session>_<position>.csv`** and position
+  slugs use hyphens only (`wrist-left`), so the position is always what follows
+  the last underscore. `RecordingFileNames.parse` and the Library depend on it.
+- **Android release key:** never commit `keystore.properties` or any `.jks`/`.keystore`.
+  Every release bumps `versionCode` in `android/app/build.gradle.kts`, or phones
+  refuse the update.
 - **A hub feeds two body-position slots from one bridge process.** `channelSlots`
   in `sidecar.ts` maps PPG channel → slot, and `activeRecordings` is keyed on the
   slot, not the device. That is what keeps the 17-column session CSV unchanged.
@@ -92,11 +112,22 @@ targets — see [docs/development.md](docs/development.md).
 - IMU units are **m/s² and rad/s** (Zephyr sensor API) — not deg/s.
 - Kconfig symbol changes need `make rebuild`, not `make build`.
 - The desktop app's session CSV and the logger's CSV are **different schemas**;
-  `analysis/pipeline.py` only accepts the logger's. Known gap, see
+  `analysis/pipeline.py` only accepts the logger's. The Android app writes the
+  logger's, so its files load directly. Known gap for the desktop app, see
   [docs/roadmap.md](docs/roadmap.md).
+- Over BLE the stream is **~24.3 Hz, not 100 Hz**, and arrival times are
+  quantised by the connection interval. `pipeline.py` measures its sample rate
+  from the timestamps (`estimate_fs`); `bridge.py` still assumes 100. HRV from
+  BLE recordings is not reliable.
+- Android can list only the `Download/` files it created itself: after a
+  reinstall, old recordings disappear from the Library (open them with the file
+  picker instead).
+- GATT **status 8** on the phone is a supervision timeout. On a node it usually
+  means deep sleep (10 s without motion or skin contact), not a bug.
 - `Documents/MAID_Sessions` is the pre-rename recordings directory. It is listed
   read-only for backwards compatibility; never write to it.
-- There are **no tests** in any layer.
+- Tests exist only in `android/` (`./gradlew test`, JVM). Firmware, bridge,
+  desktop app and analysis have none.
 
 ## Conventions
 
@@ -106,4 +137,6 @@ targets — see [docs/development.md](docs/development.md).
 - LF line endings everywhere except `.ps1`/`.bat`; CAD files under `hardware/`
   are marked `binary`.
 - Do not commit `build/`, `build-hub/`, `.west/`, `zephyr/`, `modules/`,
-  `.venv/`, `app/node_modules/`, `app/out/`, `app/sidecar/`.
+  `.venv/`, `app/node_modules/`, `app/out/`, `app/sidecar/`, `android/build/`,
+  `android/app/build/`, `android/.gradle/`, `android/.idea/`, `android/local.properties`,
+  `android/keystore.properties`, `*.jks`, `*.keystore`.
